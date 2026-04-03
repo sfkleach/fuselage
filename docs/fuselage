@@ -1,0 +1,364 @@
+#!/bin/bash
+#
+# fuselage - run a command with ephemeral virtual filesystems
+#
+# See SPEC.md for full documentation.
+
+set -euo pipefail
+
+PROG="$(basename "$0")"
+FUSELAGE_HOME="${FUSELAGE_HOME:-$HOME/.fuselage}"
+
+# --- helpers -----------------------------------------------------------
+
+die()  { echo "$PROG: error: $*" >&2; exit 1; }
+info() { echo "$PROG: $*" >&2; }
+
+usage() {
+    cat >&2 << 'EOF'
+usage: fuselage [OPTIONS...] [--] COMMAND [ARG...]
+       fuselage [OPTIONS...] --run PATH [ARG...]
+
+  --static=[NAME:]FILE    Extract FILE (cached, read-only)
+  --dynamic=[NAME:]FILE   Extract FILE (fresh, mutable)
+  --run PATH [ARG...]     Find PATH in extracted archives and run it
+
+FILE is a zip file or a text file containing base64-encoded zip data.
+NAME defaults to the filename stem (preserving case).
+All archive names must be unique across --static and --dynamic.
+Archives are optional; bare "fuselage COMMAND" gives an ephemeral tmpdir.
+EOF
+    exit 1
+}
+
+# Strip path and extension: /path/to/my-data.zip -> my-data
+stemname() {
+    local base
+    base="$(basename "$1")"
+    base="${base%.zip}"
+    base="${base%.b64}"
+    echo "$base"
+}
+
+# Detect zip (by magic bytes) or base64-encoded zip, produce a usable zip.
+prepare_zip() {
+    local input="$1" output="$2"
+    local magic
+    magic="$(head -c4 "$input" | od -A n -t x1 | tr -d ' \n')"
+
+    if [[ "$magic" == "504b0304" ]]; then
+        cp "$input" "$output"
+    else
+        base64 -d < "$input" > "$output" \
+            || die "failed to decode base64 from: $input"
+        local decoded_magic
+        decoded_magic="$(head -c4 "$output" | od -A n -t x1 | tr -d ' \n')"
+        [[ "$decoded_magic" == "504b0304" ]] \
+            || die "not a zip file (even after base64 decode): $input"
+    fi
+}
+
+# ================================================================
+# PHASE 2: inside the mount namespace
+# ================================================================
+
+if [[ -n "${_FUSELAGE_IN_NS:-}" ]]; then
+
+    SPECS=()
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && SPECS+=("$line")
+    done <<< "$_FUSELAGE_SPECS"
+
+    PROCDIR="$_FUSELAGE_PROCDIR"
+    REAL_UID="${_FUSELAGE_REAL_UID:-$(id -u)}"
+    REAL_GID="${_FUSELAGE_REAL_GID:-$(id -g)}"
+    IS_SUID="${_FUSELAGE_SUID:-}"
+    RUN_PATH="${_FUSELAGE_RUN_PATH:-}"
+
+    unset _FUSELAGE_SPECS _FUSELAGE_IN_NS _FUSELAGE_PROCDIR
+    unset _FUSELAGE_REAL_UID _FUSELAGE_REAL_GID _FUSELAGE_SUID
+    unset _FUSELAGE_RUN_PATH
+
+    COMMAND=("$@")
+
+    # Mount tmpfs over procdir — contents private to this namespace
+    mount -t tmpfs -o "mode=0700" fuselage-proc "$PROCDIR"
+
+    # If genuinely setuid, chown to real user
+    if [[ -n "$IS_SUID" && "$REAL_UID" != "0" ]]; then
+        chown "$REAL_UID:$REAL_GID" "$PROCDIR"
+    fi
+
+    cleanup() {
+        umount -l "$PROCDIR" 2>/dev/null || true
+        rmdir "$PROCDIR" 2>/dev/null || true
+    }
+    trap cleanup EXIT
+
+    export FUSELAGE_TMPDIR="$PROCDIR/tmp"
+    mkdir -p "$FUSELAGE_TMPDIR"
+
+    HAS_DYNAMIC=""
+    HAS_STATIC=""
+
+    for spec in "${SPECS[@]}"; do
+        TYPE="${spec%%:*}"
+        REST="${spec#*:}"
+
+        case "$TYPE" in
+            dynamic)
+                NAME="${REST%%:*}"
+                FILE="${REST#*:}"
+                DEST="$PROCDIR/dynamic/$NAME"
+                mkdir -p "$DEST"
+                TMPZIP="$PROCDIR/.tmp-$NAME.zip"
+                prepare_zip "$FILE" "$TMPZIP"
+                unzip -q -o "$TMPZIP" -d "$DEST" \
+                    || die "dynamic($NAME): extraction failed"
+                rm -f "$TMPZIP"
+                HAS_DYNAMIC=1
+                info "dynamic: $NAME"
+                ;;
+
+            static)
+                HASH="${REST%%:*}"
+                REST2="${REST#*:}"
+                NAME="${REST2%%:*}"
+                FILE="${REST2#*:}"
+                CACHEDIR="$FUSELAGE_HOME/cache/$HASH"
+                SENTINEL="$FUSELAGE_HOME/cache/$HASH.complete"
+
+                if [[ ! -f "$SENTINEL" ]]; then
+                    mkdir -p "$CACHEDIR"
+                    TMPZIP="$PROCDIR/.tmp-$NAME.zip"
+                    prepare_zip "$FILE" "$TMPZIP"
+                    unzip -q -o "$TMPZIP" -d "$CACHEDIR" \
+                        || die "static($NAME): extraction failed"
+                    rm -f "$TMPZIP"
+                    touch "$SENTINEL"
+                    info "static: $NAME (cached)"
+                else
+                    info "static: $NAME (from cache)"
+                fi
+
+                DEST="$PROCDIR/static/$NAME"
+                mkdir -p "$DEST"
+                mount --bind "$CACHEDIR" "$DEST"
+                mount --bind -o remount,ro "$DEST" "$DEST"
+                HAS_STATIC=1
+                ;;
+
+            *)  die "unknown spec: $TYPE" ;;
+        esac
+    done
+
+    [[ -n "$HAS_DYNAMIC" ]] && export FUSELAGE_DYNAMIC="$PROCDIR/dynamic"
+    [[ -n "$HAS_STATIC" ]]  && export FUSELAGE_STATIC="$PROCDIR/static"
+
+    # --- resolve --run path ---
+
+    if [[ -n "$RUN_PATH" ]]; then
+        FOUND=()
+
+        # Search dynamic archives
+        if [[ -n "$HAS_DYNAMIC" ]]; then
+            for dir in "$PROCDIR"/dynamic/*/; do
+                [[ -d "$dir" ]] || continue
+                if [[ -e "$dir$RUN_PATH" ]]; then
+                    FOUND+=("$dir$RUN_PATH")
+                fi
+            done
+        fi
+
+        # Search static archives
+        if [[ -n "$HAS_STATIC" ]]; then
+            for dir in "$PROCDIR"/static/*/; do
+                [[ -d "$dir" ]] || continue
+                if [[ -e "$dir$RUN_PATH" ]]; then
+                    FOUND+=("$dir$RUN_PATH")
+                fi
+            done
+        fi
+
+        case ${#FOUND[@]} in
+            0) die "--run: '$RUN_PATH' not found in any archive" ;;
+            1) ;;  # good
+            *) die "--run: '$RUN_PATH' found in multiple archives: ${FOUND[*]}" ;;
+        esac
+
+        EXECUTABLE="${FOUND[0]}"
+        [[ -x "$EXECUTABLE" ]] \
+            || die "--run: '$EXECUTABLE' is not executable"
+
+        COMMAND=("$EXECUTABLE" "${COMMAND[@]}")
+    fi
+
+    # --- drop privileges if genuinely setuid ---
+
+    if [[ -n "$IS_SUID" && "$REAL_UID" != "0" ]]; then
+        info "dropping privileges to uid=$REAL_UID"
+        exec setpriv --reuid="$REAL_UID" --regid="$REAL_GID" \
+             --clear-groups -- "${COMMAND[@]}"
+    fi
+
+    info "exec: ${COMMAND[*]}"
+    exec "${COMMAND[@]}"
+fi
+
+# ================================================================
+# PHASE 1: parse arguments, set up, enter namespace
+# ================================================================
+
+[[ $# -gt 0 ]] || usage
+
+# --- verify/create ~/.fuselage/ ---
+
+if [[ -d "$FUSELAGE_HOME" ]]; then
+    OWNER="$(stat -c %u "$FUSELAGE_HOME" 2>/dev/null || stat -f %u "$FUSELAGE_HOME")"
+    [[ "$OWNER" == "$(id -u)" ]] \
+        || die "$FUSELAGE_HOME exists but is owned by uid $OWNER, not $(id -u)"
+else
+    mkdir -p "$FUSELAGE_HOME"
+    chmod 0700 "$FUSELAGE_HOME"
+fi
+
+# --- clean stale procdirs ---
+
+if [[ -d "$FUSELAGE_HOME/procdirs" ]]; then
+    for d in "$FUSELAGE_HOME/procdirs"/*/; do
+        [[ -d "$d" ]] || continue
+        pid="$(basename "$d")"
+        if ! kill -0 "$pid" 2>/dev/null; then
+            rmdir "$d" 2>/dev/null || true
+        fi
+    done
+fi
+
+# --- parse arguments ---
+
+MOUNT_SPECS=()
+COMMAND=()
+RUN_PATH=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            usage
+            ;;
+        --static=*)
+            MOUNT_SPECS+=("static:${1#--static=}")
+            shift
+            ;;
+        --static)
+            [[ -n "${2:-}" ]] || die "--static requires an argument"
+            MOUNT_SPECS+=("static:$2")
+            shift 2
+            ;;
+        --dynamic=*)
+            MOUNT_SPECS+=("dynamic:${1#--dynamic=}")
+            shift
+            ;;
+        --dynamic)
+            [[ -n "${2:-}" ]] || die "--dynamic requires an argument"
+            MOUNT_SPECS+=("dynamic:$2")
+            shift 2
+            ;;
+        --run)
+            [[ -n "${2:-}" ]] || die "--run requires a path"
+            RUN_PATH="$2"
+            shift 2
+            # Everything remaining is args to the run target
+            COMMAND=("$@")
+            break
+            ;;
+        --)
+            shift
+            COMMAND=("$@")
+            break
+            ;;
+        *)
+            COMMAND=("$@")
+            break
+            ;;
+    esac
+done
+
+# Validate: need a command or --run, and --run needs archives
+if [[ -z "$RUN_PATH" ]]; then
+    [[ ${#COMMAND[@]} -gt 0 ]] || die "no command specified"
+else
+    [[ ${#MOUNT_SPECS[@]} -gt 0 ]] \
+        || die "--run requires at least one --static or --dynamic archive"
+fi
+
+# --- resolve specs: parse NAME:FILE, compute hashes ---
+
+RESOLVED=()
+ALL_NAMES=()
+
+for spec in "${MOUNT_SPECS[@]}"; do
+    TYPE="${spec%%:*}"
+    ARG="${spec#*:}"
+
+    # Split optional NAME:FILE or just FILE
+    if [[ "$ARG" == *:* ]]; then
+        MAYBE_NAME="${ARG%%:*}"
+        MAYBE_FILE="${ARG#*:}"
+        if [[ -f "$ARG" ]]; then
+            NAME="$(stemname "$ARG")"
+            FILE="$(realpath "$ARG")"
+        elif [[ -f "$MAYBE_FILE" ]]; then
+            NAME="$MAYBE_NAME"
+            FILE="$(realpath "$MAYBE_FILE")"
+        else
+            die "file not found: $MAYBE_FILE"
+        fi
+    else
+        [[ -f "$ARG" ]] || die "file not found: $ARG"
+        NAME="$(stemname "$ARG")"
+        FILE="$(realpath "$ARG")"
+    fi
+
+    # Check for duplicate names
+    for existing in "${ALL_NAMES[@]+"${ALL_NAMES[@]}"}"; do
+        [[ "$existing" != "$NAME" ]] \
+            || die "duplicate archive name '$NAME'; use NAME: prefix to disambiguate"
+    done
+    ALL_NAMES+=("$NAME")
+
+    if [[ "$TYPE" == "static" ]]; then
+        HASH="$(sha256sum "$FILE" | cut -c1-16)"
+        RESOLVED+=("static:$HASH:$NAME:$FILE")
+    else
+        RESOLVED+=("dynamic:$NAME:$FILE")
+    fi
+done
+
+# --- create procdir ---
+
+PROCDIR="$FUSELAGE_HOME/procdirs/$$"
+mkdir -p "$PROCDIR"
+
+# --- serialize and enter mount namespace ---
+
+if [[ ${#RESOLVED[@]} -gt 0 ]]; then
+    printf -v _FUSELAGE_SPECS '%s\n' "${RESOLVED[@]}"
+else
+    _FUSELAGE_SPECS=""
+fi
+export _FUSELAGE_SPECS
+export _FUSELAGE_IN_NS=1
+export _FUSELAGE_PROCDIR="$PROCDIR"
+export _FUSELAGE_REAL_UID="$(id -u)"
+export _FUSELAGE_REAL_GID="$(id -g)"
+export _FUSELAGE_RUN_PATH="$RUN_PATH"
+
+if [[ "$(id -u)" == "0" ]]; then
+    # Already root (e.g. via sudo) — just need a mount namespace
+    export _FUSELAGE_SUID=1
+    exec unshare --mount --propagation private -- "$0" "${COMMAND[@]}"
+else
+    # Unprivileged — need a user namespace too
+    exec unshare --user --mount --map-root-user --propagation private \
+        -- "$0" "${COMMAND[@]}"
+fi
