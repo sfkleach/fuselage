@@ -37,11 +37,6 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Validate: --run and command are mutually exclusive
-    if args.run.is_some() && !args.command.is_empty() {
-        anyhow::bail!("--run and a trailing COMMAND are mutually exclusive; use one or the other");
-    }
-
     // --run requires at least one archive
     if args.run.is_some() && args.dynamic.is_empty() && args.r#static.is_empty() {
         anyhow::bail!("--run requires at least one --static or --dynamic archive");
@@ -51,6 +46,7 @@ fn main() -> Result<()> {
     if args.run.is_none() && args.command.is_empty() {
         anyhow::bail!("no command specified; use -- COMMAND or --run PATH");
     }
+
 
     let ruid = nix::unistd::getuid();
     let rgid = nix::unistd::getgid();
@@ -96,8 +92,8 @@ fn main() -> Result<()> {
     // ── Dynamic archives ──────────────────────────────────────────────────────
     // Zip: extract to pd/dynamic/NAME/.
     // Squashfs: extract via backhand to pd/dynamic/NAME/.
+    let dynamic_root = pd.join("dynamic");
     if !dynamic_specs.is_empty() {
-        let dynamic_root = pd.join("dynamic");
         for spec in &dynamic_specs {
             let dest = dynamic_root.join(&spec.name);
             std::fs::create_dir_all(&dest)
@@ -233,14 +229,24 @@ fn main() -> Result<()> {
     unsafe { std::env::set_var("FUSELAGE_TMPDIR", &tmpdir) };
 
     // Build the argv for exec.
-    let cmd = &args.command[0];
-    let cmd_args = &args.command[1..];
+    let (exec_path, extra_args): (String, &[String]) = if let Some(ref run_path) = args.run {
+        let resolved = resolve_run_path(
+            run_path,
+            &dynamic_specs,
+            &static_specs,
+            &pd.join("dynamic"),
+            &static_root,
+        )?;
+        (resolved, &args.command)
+    } else {
+        (args.command[0].clone(), &args.command[1..])
+    };
 
-    let prog = CString::new(cmd.as_str())
-        .with_context(|| format!("command contains a null byte: {cmd:?}"))?;
-    let mut argv: Vec<CString> = Vec::with_capacity(1 + cmd_args.len());
+    let prog = CString::new(exec_path.as_str())
+        .with_context(|| format!("command contains a null byte: {exec_path:?}"))?;
+    let mut argv: Vec<CString> = Vec::with_capacity(1 + extra_args.len());
     argv.push(prog.clone());
-    for arg in cmd_args {
+    for arg in extra_args {
         argv.push(
             CString::new(arg.as_str())
                 .with_context(|| format!("argument contains a null byte: {arg:?}"))?,
@@ -275,6 +281,63 @@ fn parse_archive_specs(
         specs.push(spec);
     }
     Ok(specs)
+}
+
+/// Resolve a `--run PATH` argument to an absolute executable path.
+///
+/// Rules (from the spec):
+/// - `path` must be relative (no leading `/`)
+/// - the first path component must be the name of a mounted dynamic or static archive
+/// - the rest of the path must resolve to an executable file under that archive's root
+///
+/// Dynamic archives are checked first; static archives second.
+fn resolve_run_path(
+    path: &str,
+    dynamic_specs: &[archive::ArchiveSpec],
+    static_specs: &[archive::ArchiveSpec],
+    dynamic_root: &std::path::Path,
+    static_root: &std::path::Path,
+) -> Result<String> {
+    let p = std::path::Path::new(path);
+
+    if p.is_absolute() {
+        anyhow::bail!("--run path must be relative, got: {path:?}");
+    }
+
+    let mut components = p.components();
+    let first = match components.next() {
+        Some(std::path::Component::Normal(c)) => c.to_string_lossy().into_owned(),
+        _ => anyhow::bail!("--run path must begin with an archive name, got: {path:?}"),
+    };
+
+    // Determine which root to look in.
+    let root = if dynamic_specs.iter().any(|s| s.name == first) {
+        dynamic_root
+    } else if static_specs.iter().any(|s| s.name == first) {
+        static_root
+    } else {
+        anyhow::bail!(
+            "--run: first path component {first:?} does not match any mounted archive name"
+        );
+    };
+
+    let full = root.join(path);
+
+    if !full.exists() {
+        anyhow::bail!("--run: path does not exist: {}", full.display());
+    }
+    if !full.is_file() {
+        anyhow::bail!("--run: path is not a file: {}", full.display());
+    }
+
+    // Check execute permission for the current (real) user.
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(&full)?.permissions().mode();
+    if mode & 0o111 == 0 {
+        anyhow::bail!("--run: file is not executable: {}", full.display());
+    }
+
+    Ok(full.to_string_lossy().into_owned())
 }
 
 /// Fork, exec `prog` with `argv` in the child, wait for it in the parent,

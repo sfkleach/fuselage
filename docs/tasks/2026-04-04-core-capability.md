@@ -82,3 +82,15 @@ cache).
 
 Implement a cache expiry mechanism as described in [the decision record on cache expiry](../decisions/0001-cache-expiry-mechanism/0001-cache-expiry-mechanism.md).
 
+## Step 8, --run <path>
+
+The `--run <path> [ARG...]` option is designed to make it straightforward to run a
+command that resides on the mounted filesystem. The <path>:
+
+- must be a relative path
+- the first directory name in the path must be one of the mounted sub-folders
+  in $FUSELAGE_STATIC or $FUSELAGE_DYNAMIC
+- the rest of the path must name an executable file under that folder.
+
+If these are true then that executable run with all the remaining ARGuments
+passed as arguments.
