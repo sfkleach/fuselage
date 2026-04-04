@@ -289,7 +289,7 @@ fn make_dir_tree_writable(path: &Path) {
 ///   guard prevents racing with a concurrent fuselage that just wrote them).
 /// - Orphaned `.sfs` files (no matching `.complete`) older than 1 hour are
 ///   removed (interrupted builds).
-fn reap_cache(cache_dir: &Path, max_age_secs: u64) {
+pub(crate) fn reap_cache(cache_dir: &Path, max_age_secs: u64) {
     const RECENCY_GUARD_SECS: u64 = 60;
     const ORPHAN_AGE_SECS: u64 = 3600;
 
@@ -355,5 +355,130 @@ fn reap_cache(cache_dir: &Path, max_age_secs: u64) {
         if age > ORPHAN_AGE_SECS {
             let _ = fs::remove_file(&sfs);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use filetime::{FileTime, set_file_mtime};
+    use std::time::{SystemTime, Duration};
+
+    /// Write an empty file at `dir/name` and optionally backdate its mtime by
+    /// `age_secs` seconds relative to now.
+    fn touch(dir: &Path, name: &str, age_secs: u64) {
+        let path = dir.join(name);
+        fs::write(&path, b"").unwrap();
+        if age_secs > 0 {
+            let mtime = SystemTime::now() - Duration::from_secs(age_secs);
+            set_file_mtime(&path, FileTime::from_system_time(mtime)).unwrap();
+        }
+    }
+
+    /// Create a directory at `dir/name` and optionally backdate its mtime.
+    fn mkdir(dir: &Path, name: &str) {
+        fs::create_dir_all(dir.join(name)).unwrap();
+    }
+
+    // ── Eviction of stale sentinels ───────────────────────────────────────────
+
+    #[test]
+    fn reap_evicts_old_sentinel_and_sfs() {
+        let cache = tempfile::TempDir::new().unwrap();
+        let d = cache.path();
+        // Sentinel and sfs older than 31 days (beyond 60-second recency guard).
+        touch(d, "aabbccdd11223344.complete", 31 * 86400);
+        touch(d, "aabbccdd11223344.sfs", 31 * 86400);
+
+        reap_cache(d, 30 * 86400);
+
+        assert!(!d.join("aabbccdd11223344.complete").exists(), "sentinel should be removed");
+        assert!(!d.join("aabbccdd11223344.sfs").exists(), "sfs should be removed");
+    }
+
+    #[test]
+    fn reap_evicts_old_sentinel_and_directory() {
+        let cache = tempfile::TempDir::new().unwrap();
+        let d = cache.path();
+        touch(d, "aabbccdd11223344.complete", 31 * 86400);
+        mkdir(d, "aabbccdd11223344");
+
+        reap_cache(d, 30 * 86400);
+
+        assert!(!d.join("aabbccdd11223344.complete").exists());
+        assert!(!d.join("aabbccdd11223344").exists());
+    }
+
+    // ── Recency guard ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn reap_keeps_recent_sentinel() {
+        let cache = tempfile::TempDir::new().unwrap();
+        let d = cache.path();
+        // 30 seconds old — within the 60-second recency guard.
+        touch(d, "aabbccdd11223344.complete", 30);
+        touch(d, "aabbccdd11223344.sfs", 30);
+
+        // Use a very short max_age so age > max_age is true, but recency guard fires.
+        reap_cache(d, 10);
+
+        assert!(d.join("aabbccdd11223344.complete").exists(), "recent sentinel must not be removed");
+        assert!(d.join("aabbccdd11223344.sfs").exists(), "recent sfs must not be removed");
+    }
+
+    // ── Active entries (younger than max_age) ─────────────────────────────────
+
+    #[test]
+    fn reap_keeps_young_sentinel() {
+        let cache = tempfile::TempDir::new().unwrap();
+        let d = cache.path();
+        // 10 days old — younger than 30-day threshold.
+        touch(d, "aabbccdd11223344.complete", 10 * 86400);
+        touch(d, "aabbccdd11223344.sfs", 10 * 86400);
+
+        reap_cache(d, 30 * 86400);
+
+        assert!(d.join("aabbccdd11223344.complete").exists());
+        assert!(d.join("aabbccdd11223344.sfs").exists());
+    }
+
+    // ── Orphaned .sfs files ───────────────────────────────────────────────────
+
+    #[test]
+    fn reap_removes_orphaned_sfs_older_than_one_hour() {
+        let cache = tempfile::TempDir::new().unwrap();
+        let d = cache.path();
+        // No .complete sentinel; sfs is 2 hours old.
+        touch(d, "aabbccdd11223344.sfs", 2 * 3600);
+
+        reap_cache(d, 30 * 86400);
+
+        assert!(!d.join("aabbccdd11223344.sfs").exists(), "old orphaned sfs should be removed");
+    }
+
+    #[test]
+    fn reap_keeps_orphaned_sfs_younger_than_one_hour() {
+        let cache = tempfile::TempDir::new().unwrap();
+        let d = cache.path();
+        // No .complete sentinel; sfs is only 10 minutes old (in-progress build).
+        touch(d, "aabbccdd11223344.sfs", 600);
+
+        reap_cache(d, 30 * 86400);
+
+        assert!(d.join("aabbccdd11223344.sfs").exists(), "young orphaned sfs should be kept");
+    }
+
+    // ── Edge cases ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn reap_nonexistent_dir_is_noop() {
+        // Must not panic or error.
+        reap_cache(std::path::Path::new("/nonexistent/cache"), 30 * 86400);
+    }
+
+    #[test]
+    fn reap_empty_dir_is_noop() {
+        let cache = tempfile::TempDir::new().unwrap();
+        reap_cache(cache.path(), 30 * 86400);
     }
 }

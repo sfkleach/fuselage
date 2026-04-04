@@ -270,6 +270,16 @@ check_fails "no command rejected" "$FUSELAGE"
 check_fails "missing archive file rejected" \
     "$FUSELAGE" --dynamic="$WORKDIR/nosuch.zip" -- true
 
+# A file whose stem is empty (e.g. ".zip") must be rejected with a clear error.
+python3 -c "
+import zipfile, os
+z = zipfile.ZipFile('$WORKDIR/.zip', 'w')
+z.writestr('x.txt', 'x')
+z.close()
+"
+check_fails "empty derived name rejected" \
+    "$FUSELAGE" --dynamic="$WORKDIR/.zip" -- true
+
 echo ""
 
 # ── Setuid-specific tests ─────────────────────────────────────────────────────

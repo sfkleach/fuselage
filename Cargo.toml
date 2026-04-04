@@ -25,6 +25,12 @@ loopdev-3 = "0.5"
 anyhow = "1"
 thiserror = "2"
 
+[dev-dependencies]
+# Backdate file mtimes in unit tests for reap_cache() without sleeping.
+filetime = "0.2"
+# Temporary files and directories for unit tests.
+tempfile = "3"
+
 [profile.release]
 strip = true        # strip symbols (already happening, but makes it explicit)
 opt-level = "z"     # optimise for size instead of speed

@@ -392,3 +392,69 @@ fn run_with_cleanup(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// Create an empty temp file and return its path as a String suitable
+    /// for `parse_archive_specs`.
+    fn tmp_file(dir: &std::path::Path, name: &str) -> String {
+        let p = dir.join(name);
+        fs::write(&p, b"PK\x03\x04").unwrap(); // minimal zip magic so ArchiveSpec resolves it
+        p.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn parse_specs_empty_input() {
+        let mut seen = Vec::new();
+        let specs = parse_archive_specs(&[], &mut seen).unwrap();
+        assert!(specs.is_empty());
+        assert!(seen.is_empty());
+    }
+
+    #[test]
+    fn parse_specs_single_entry() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = tmp_file(dir.path(), "data.zip");
+        let mut seen = Vec::new();
+        let specs = parse_archive_specs(&[path], &mut seen).unwrap();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].name, "data");
+        assert_eq!(seen, vec!["data"]);
+    }
+
+    #[test]
+    fn parse_specs_duplicate_in_same_list() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p1 = tmp_file(dir.path(), "data.zip");
+        let p2 = tmp_file(dir.path(), "other.zip");
+        // Use NAME: prefix to force the same name twice.
+        let mut seen = Vec::new();
+        let result = parse_archive_specs(&[format!("data:{p1}"), format!("data:{p2}")], &mut seen);
+        assert!(result.is_err(), "duplicate name should be rejected");
+    }
+
+    #[test]
+    fn parse_specs_duplicate_across_two_calls() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p1 = tmp_file(dir.path(), "data.zip");
+        let p2 = tmp_file(dir.path(), "other.zip");
+        let mut seen = Vec::new();
+        parse_archive_specs(&[format!("shared:{p1}")], &mut seen).unwrap();
+        let result = parse_archive_specs(&[format!("shared:{p2}")], &mut seen);
+        assert!(result.is_err(), "duplicate name across dynamic/static should be rejected");
+    }
+
+    #[test]
+    fn parse_specs_two_distinct_names() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p1 = tmp_file(dir.path(), "alpha.zip");
+        let p2 = tmp_file(dir.path(), "beta.zip");
+        let mut seen = Vec::new();
+        let specs = parse_archive_specs(&[p1, p2], &mut seen).unwrap();
+        assert_eq!(specs.len(), 2);
+        assert_eq!(seen, vec!["alpha", "beta"]);
+    }
+}
