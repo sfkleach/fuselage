@@ -27,12 +27,18 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Extract release notes
-      run: python3 scripts/extract-changelog.py ${{ github.ref_name }} > release-notes.md
+      id: notes
+      run: |
+        {
+          echo "body<<ENDOFBODY"
+          python3 scripts/extract-changelog.py ${{ github.ref_name }}
+          echo "ENDOFBODY"
+        } >> "$GITHUB_OUTPUT"
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        body_path: release-notes.md
+        body: ${{ steps.notes.outputs.body }}
         prerelease: ${{ contains(github.ref_name, '-rc') }}
         draft: ${{ contains(github.ref_name, '-') && !contains(github.ref_name, '-rc') }}
 
