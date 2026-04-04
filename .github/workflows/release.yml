@@ -20,8 +20,24 @@ jobs:
   test:
     uses: ./.github/workflows/build-and-test.yml
 
-  release:
+  create-release:
     needs: [check-changelog, test]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Extract release notes
+      run: python3 scripts/extract-changelog.py ${{ github.ref_name }} > release-notes.md
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        body_path: release-notes.md
+        prerelease: ${{ contains(github.ref_name, '-rc') }}
+        draft: ${{ contains(github.ref_name, '-') && !contains(github.ref_name, '-rc') }}
+
+  upload-binaries:
+    needs: create-release
     strategy:
       matrix:
         include:
@@ -32,12 +48,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
-
-    - name: Extract release notes
-      id: notes
-      run: |
-        python3 scripts/extract-changelog.py ${{ github.ref_name }} > release-notes.md
-        echo "notes_file=release-notes.md" >> $GITHUB_OUTPUT
 
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
@@ -63,10 +73,9 @@ jobs:
         tar czf "$ARCHIVE" -C "$(dirname $BINARY)" "$(basename $BINARY)"
         echo "archive=$ARCHIVE" >> $GITHUB_OUTPUT
 
-    - name: Upload to GitHub Release
+    - name: Upload binary to GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        body_path: ${{ steps.notes.outputs.notes_file }}
         prerelease: ${{ contains(github.ref_name, '-rc') }}
         draft: ${{ contains(github.ref_name, '-') && !contains(github.ref_name, '-rc') }}
         files: ${{ steps.package.outputs.archive }}
