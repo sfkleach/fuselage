@@ -1,7 +1,7 @@
 default:
     @just --list
 
-test: unittest lint fmt-check audit build
+test: unittest lint fmt-check audit build functest
 
 unittest:
     cargo test
@@ -35,6 +35,24 @@ build:
 build-release:
     cargo build --release
     ls -alh target/release/fuselage
+
+functest-plain:
+    # Functional tests for the plain binary
+    rm -f target/debug/fuselage
+    cargo build
+    # Run functional tests on target/debug/fuselage
+    # ...
+
+functest-setuid:
+    # Functional tests for the setuid binary
+    rm -f target/release/fuselage
+    cargo build --release
+    sudo chown root:root target/release/fuselage
+    sudo chmod u+s target/release/fuselage
+    # Run functional tests on target/release/fuselage
+    # ...
+
+functest: functest-plain functest-setuid
 
 setuid:
     sudo chown root:root target/debug/fuselage
