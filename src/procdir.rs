@@ -89,30 +89,89 @@ pub fn setup_procdir_in_namespace(procdir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Returns `~/.fuselage/cache/`.
+pub fn cache_dir(home: &Path) -> PathBuf {
+    home.join("cache")
+}
+
+/// Attach `sfs` to a fresh loop device and mount it read-only on `dest`.
+///
+/// Uses `LO_FLAGS_AUTOCLEAR` so the loop device detaches itself automatically
+/// when the mount is removed (i.e. when the namespace is destroyed on exit).
+/// No explicit cleanup is needed.
+///
+/// Requires `CAP_SYS_ADMIN` (real root or setuid-root mode).
+pub fn loop_mount_sfs(sfs: &Path, dest: &Path) -> Result<()> {
+    use loopdev::LoopControl;
+
+    let ctrl = LoopControl::open().context("failed to open /dev/loop-control")?;
+    let dev = ctrl.next_free().context("no free loop device available")?;
+
+    dev.with()
+        .read_only(true)
+        .autoclear(true)
+        .attach(sfs)
+        .with_context(|| format!("failed to attach {} to loop device", sfs.display()))?;
+
+    let loop_path = dev.path().ok_or_else(|| anyhow::anyhow!("loop device has no path"))?;
+
+    mount(
+        Some(&loop_path),
+        dest,
+        Some("squashfs"),
+        MsFlags::MS_RDONLY,
+        None::<&str>,
+    )
+    .with_context(|| {
+        format!(
+            "failed to mount squashfs {} on {}",
+            sfs.display(),
+            dest.display()
+        )
+    })?;
+
+    // `dev` drops here; autoclear fires when the mount is gone.
+    Ok(())
+}
+
+/// Bind-mount `src` onto `dest` and then remount `dest` read-only.
+///
+/// Use this to expose an external directory (e.g. the cache) as a read-only
+/// mount point inside the namespace.
+pub fn bind_mount_readonly_from(src: &Path, dest: &Path) -> Result<()> {
+    mount(
+        Some(src),
+        dest,
+        None::<&str>,
+        MsFlags::MS_BIND,
+        None::<&str>,
+    )
+    .with_context(|| {
+        format!(
+            "bind-mount from {} to {} failed",
+            src.display(),
+            dest.display()
+        )
+    })?;
+
+    mount(
+        None::<&str>,
+        dest,
+        None::<&str>,
+        MsFlags::MS_BIND | MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY,
+        None::<&str>,
+    )
+    .with_context(|| format!("remount read-only failed on {}", dest.display()))?;
+
+    Ok(())
+}
+
 /// Bind-mount `path` onto itself and then remount it read-only.
 ///
 /// A bind-mount is required first because the kernel won't let you remount
 /// a plain directory read-only — only an existing mount point.
 pub fn bind_mount_readonly(path: &Path) -> Result<()> {
-    mount(
-        Some(path),
-        path,
-        None::<&str>,
-        MsFlags::MS_BIND,
-        None::<&str>,
-    )
-    .with_context(|| format!("bind-mount failed on {}", path.display()))?;
-
-    mount(
-        None::<&str>,
-        path,
-        None::<&str>,
-        MsFlags::MS_BIND | MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY,
-        None::<&str>,
-    )
-    .with_context(|| format!("remount read-only failed on {}", path.display()))?;
-
-    Ok(())
+    bind_mount_readonly_from(path, path)
 }
 
 /// Recursively chown a directory tree to `uid`/`gid`.

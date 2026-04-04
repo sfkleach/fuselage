@@ -20,6 +20,11 @@ struct Args {
     #[arg(short = 's', long = "static", value_name = "[NAME:]FILE")]
     r#static: Vec<String>,
 
+    /// Cache zip --static archives as squashfs images (keyed by SHA-256 content hash).
+    /// Disabled by default so that confidential archives leave no traces on disk.
+    #[arg(long = "cache-static")]
+    cache_static: bool,
+
     /// Find PATH in extracted archives and execute it
     #[arg(long = "run", value_name = "PATH")]
     run: Option<String>,
@@ -51,10 +56,12 @@ fn main() -> Result<()> {
     let rgid = nix::unistd::getgid();
     let euid = nix::unistd::geteuid();
 
+    // Whether we have real CAP_SYS_ADMIN (setuid-root or running as actual root).
+    // Only in this mode can we use loop devices for squashfs mounting.
+    let is_privileged = euid.is_root();
+
     // Setuid mode: binary is installed setuid-root, caller is an ordinary user.
-    // In this mode we have CAP_SYS_ADMIN (euid=0) but we want files created in
-    // ~/.fuselage to be owned by the real user, so we temporarily drop euid.
-    let is_setuid = euid.is_root() && !ruid.is_root();
+    let is_setuid = is_privileged && !ruid.is_root();
 
     if is_setuid {
         nix::unistd::seteuid(ruid).context("seteuid: failed to drop to real uid")?;
@@ -67,15 +74,13 @@ fn main() -> Result<()> {
     procdir::clean_stale_procdirs(&home)?;
 
     // Create the empty procdir entry on the real filesystem.
-    // Inside the namespace this directory will be covered by a tmpfs.
     let pd = procdir::create_procdir(&home)?;
 
     if is_setuid {
-        // Restore euid=0 so we have CAP_SYS_ADMIN for the namespace and mount calls.
         nix::unistd::seteuid(Uid::from_raw(0)).context("seteuid: failed to restore root")?;
     }
 
-    // Enter a private mount namespace (plain for root/setuid, user+mount for unprivileged).
+    // Enter a private mount namespace.
     namespace::enter_namespace()?;
 
     // Mount a tmpfs over the procdir and create tmp/ inside it.
@@ -83,48 +88,141 @@ fn main() -> Result<()> {
 
     let tmpdir = pd.join("tmp");
 
-    // Parse all archive specs up front so duplicate names across --dynamic and
-    // --static are caught before any extraction begins.
+    // Parse all archive specs up front so duplicate names are caught early.
     let mut seen_names: Vec<String> = Vec::new();
     let dynamic_specs = parse_archive_specs(&args.dynamic, &mut seen_names)?;
     let static_specs = parse_archive_specs(&args.r#static, &mut seen_names)?;
 
-    // Process --dynamic archives: extract zip into pd/dynamic/NAME/.
+    // ── Dynamic archives ──────────────────────────────────────────────────────
+    // Zip: extract to pd/dynamic/NAME/.
+    // Squashfs: extract via backhand to pd/dynamic/NAME/.
     if !dynamic_specs.is_empty() {
         let dynamic_root = pd.join("dynamic");
         for spec in &dynamic_specs {
             let dest = dynamic_root.join(&spec.name);
             std::fs::create_dir_all(&dest)
                 .with_context(|| format!("failed to create {}", dest.display()))?;
-            archive::extract_zip(&spec.file, &dest)?;
+            match archive::detect_format(&spec.file)? {
+                archive::ArchiveFormat::Zip => archive::extract_zip(&spec.file, &dest)?,
+                archive::ArchiveFormat::Squashfs => {
+                    archive::extract_squashfs(&spec.file, &dest)?
+                }
+            }
         }
         // Safety: single-threaded at this point.
         unsafe { std::env::set_var("FUSELAGE_DYNAMIC", &dynamic_root) };
     }
 
-    // Extract --static archives into pd/static/NAME/ (not yet read-only).
+    // ── Static archives ───────────────────────────────────────────────────────
+    // Phase 1: prepare content (extraction into pd/static/NAME/ or cache lookup).
+    //          Deferred mounts collected so chown can run before any mounts.
+    // Phase 2: chown everything in pd (setuid mode only).
+    // Phase 3: apply mounts (loop or bind-ro).
+
     let static_root = pd.join("static");
+    let cache_dir = procdir::cache_dir(&home);
+
+    // Collected mount actions — executed after chown.
+    enum MountAction {
+        LoopSfs(std::path::PathBuf),          // loop-mount .sfs onto dest
+        ExtractSfsBindRo(std::path::PathBuf), // extract .sfs to dest, then bind-ro
+        BindRoSelf,                           // dest already has content; bind-ro it
+        BindRoFrom(std::path::PathBuf),       // bind-mount from external dir to dest
+    }
+    let mut mount_actions: Vec<(std::path::PathBuf, MountAction)> = Vec::new();
+
     if !static_specs.is_empty() {
         for spec in &static_specs {
             let dest = static_root.join(&spec.name);
             std::fs::create_dir_all(&dest)
                 .with_context(|| format!("failed to create {}", dest.display()))?;
-            archive::extract_zip(&spec.file, &dest)?;
+
+            let action = match archive::detect_format(&spec.file)? {
+                // ── .sfs input ───────────────────────────────────────────────
+                // Use directly — no caching needed, the file is already optimal.
+                archive::ArchiveFormat::Squashfs => {
+                    if is_privileged {
+                        MountAction::LoopSfs(spec.file.clone())
+                    } else {
+                        MountAction::ExtractSfsBindRo(spec.file.clone())
+                    }
+                }
+
+                // ── zip input, no caching ────────────────────────────────────
+                archive::ArchiveFormat::Zip if !args.cache_static => {
+                    archive::extract_zip(&spec.file, &dest)?;
+                    MountAction::BindRoSelf
+                }
+
+                // ── zip input, caching enabled ───────────────────────────────
+                archive::ArchiveFormat::Zip => {
+                    std::fs::create_dir_all(&cache_dir)?;
+                    let hash = archive::compute_sha256(&spec.file)?;
+                    let sfs_path = cache_dir.join(format!("{hash}.sfs"));
+                    let dir_path = cache_dir.join(&hash);
+                    let sentinel = cache_dir.join(format!("{hash}.complete"));
+
+                    if !sentinel.exists() {
+                        // Cache miss — build the cache entry.
+                        let tmp = pd.join(format!(".tmp-{}", spec.name));
+                        std::fs::create_dir_all(&tmp)?;
+
+                        let built_sfs =
+                            archive::zip_to_squashfs(&spec.file, &sfs_path, &tmp)?;
+
+                        if !built_sfs {
+                            // mksquashfs not available — fall back to directory cache.
+                            archive::extract_zip(&spec.file, &dir_path)?;
+                        }
+
+                        std::fs::remove_dir_all(&tmp).ok();
+                        std::fs::File::create(&sentinel)
+                            .context("failed to write cache sentinel")?;
+                    }
+
+                    if sfs_path.exists() {
+                        if is_privileged {
+                            MountAction::LoopSfs(sfs_path)
+                        } else {
+                            MountAction::ExtractSfsBindRo(sfs_path)
+                        }
+                    } else {
+                        // Directory cache (mksquashfs fallback).
+                        MountAction::BindRoFrom(dir_path)
+                    }
+                }
+            };
+
+            mount_actions.push((dest, action));
         }
+
         // Safety: single-threaded at this point.
         unsafe { std::env::set_var("FUSELAGE_STATIC", &static_root) };
     }
 
+    // Phase 2: in setuid mode, chown everything before locking any mounts.
     if is_setuid {
-        // All dirs and extracted files were created as root. Recursively chown
-        // the entire procdir to the real user before locking anything read-only.
         procdir::chown_recursive(&pd, ruid, rgid)
             .context("failed to chown procdir to real user")?;
     }
 
-    // Now lock each static archive directory read-only.
-    for spec in &static_specs {
-        procdir::bind_mount_readonly(&static_root.join(&spec.name))?;
+    // Phase 3: apply deferred mounts.
+    for (dest, action) in mount_actions {
+        match action {
+            MountAction::LoopSfs(sfs) => {
+                procdir::loop_mount_sfs(&sfs, &dest)?;
+            }
+            MountAction::ExtractSfsBindRo(sfs) => {
+                archive::extract_squashfs(&sfs, &dest)?;
+                procdir::bind_mount_readonly(&dest)?;
+            }
+            MountAction::BindRoSelf => {
+                procdir::bind_mount_readonly(&dest)?;
+            }
+            MountAction::BindRoFrom(src) => {
+                procdir::bind_mount_readonly_from(&src, &dest)?;
+            }
+        }
     }
 
     // Set FUSELAGE_TMPDIR so the child process can find its scratch space.
@@ -146,10 +244,8 @@ fn main() -> Result<()> {
         );
     }
 
-    // In setuid mode the child drops to the real uid/gid before exec so that
-    // sudo and normal uid semantics work inside the command.
-    // The parent keeps root so it can umount the tmpfs and rmdir the procdir
-    // after the child exits.
+    // In setuid mode the child drops to the real uid/gid before exec.
+    // The parent keeps root so it can umount the tmpfs and rmdir the procdir.
     let drop_to = is_setuid.then_some((ruid, rgid));
 
     run_with_cleanup(&prog, &argv, &pd, drop_to)
@@ -159,7 +255,10 @@ fn main() -> Result<()> {
 ///
 /// Pass the same `seen` for both `--dynamic` and `--static` to catch
 /// duplicates across the two flags.
-fn parse_archive_specs(raw: &[String], seen: &mut Vec<String>) -> Result<Vec<archive::ArchiveSpec>> {
+fn parse_archive_specs(
+    raw: &[String],
+    seen: &mut Vec<String>,
+) -> Result<Vec<archive::ArchiveSpec>> {
     let mut specs = Vec::new();
     for arg in raw {
         let spec = archive::ArchiveSpec::parse(arg)?;
@@ -187,15 +286,12 @@ fn run_with_cleanup(
     procdir: &Path,
     drop_to: Option<(Uid, Gid)>,
 ) -> Result<()> {
-    use nix::sys::wait::{waitpid, WaitStatus};
-    use nix::unistd::{fork, ForkResult};
+    use nix::sys::wait::{WaitStatus, waitpid};
+    use nix::unistd::{ForkResult, fork};
 
     match unsafe { fork() }.context("fork failed")? {
         ForkResult::Child => {
             if let Some((uid, gid)) = drop_to {
-                // Drop supplementary groups, then gid, then uid.
-                // setresuid/setresgid set real, effective, and saved-set to the same value,
-                // making the drop permanent and irreversible.
                 if let Err(e) = nix::unistd::setgroups(&[gid]) {
                     eprintln!("fuselage: setgroups failed: {e}");
                     std::process::exit(1);
@@ -220,8 +316,6 @@ fn run_with_cleanup(
             match status {
                 WaitStatus::Exited(_, code) => std::process::exit(code),
                 WaitStatus::Signaled(_, sig, _) => {
-                    // Re-raise so the parent exits with the same signal,
-                    // giving the caller an accurate exit status.
                     let _ = nix::sys::signal::raise(sig);
                     std::process::exit(128 + sig as i32);
                 }

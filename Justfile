@@ -32,6 +32,10 @@ fmt-check:
 build:
     cargo build
 
+build-release:
+    cargo build --release
+    ls -alh target/release/fuselage
+
 setuid:
     sudo chown root:root target/debug/fuselage
     sudo chmod u+s target/debug/fuselage

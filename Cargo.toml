@@ -8,8 +8,8 @@ license = "MIT"
 [dependencies]
 # CLI argument parsing
 clap = { version = "4", features = ["derive"] }
-# ZIP archive extraction
-zip = "2"
+# ZIP archive extraction — xz disabled to avoid conflict with backhand's liblzma-sys
+zip = { version = "2", default-features = false, features = ["aes-crypto", "bzip2", "deflate", "deflate64", "time", "zstd"] }
 # SHA-256 content hashing for --static cache keys
 sha2 = "0.10"
 hex = "0.4"
@@ -17,6 +17,10 @@ hex = "0.4"
 base64 = "0.22"
 # Linux syscalls: unshare(2), mount(2)
 nix = { version = "0.29", features = ["mount", "user", "sched", "signal", "process", "fs"] }
+# SquashFS reading and extraction (pure Rust)
+backhand = "0.25"
+# Linux loop device management for squashfs loop-mounting (privileged mode)
+loopdev-3 = "0.5"
 # Error handling
 anyhow = "1"
 thiserror = "2"

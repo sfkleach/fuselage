@@ -56,7 +56,14 @@ when mounted as --static by unpacking into an cache indexed by the hash of the
 zip file itself. Subsequent runs can use the cache to skip the unpacking. This
 behaviour is gated by the `--cache-static` flag.
 
-### Suggested cache expiry mechanism
+## Step 6, Squashfs
+
+[Already implemented]
+
+Support squashfs as a first class format.
+
+
+## Decision, Prior to Step 7, Suggested cache expiry mechanism
 
 This section suggests a mechanism based on last-access times. However if there
 are better mechanisms available, please suggest them.
