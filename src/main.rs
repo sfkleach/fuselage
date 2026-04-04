@@ -47,7 +47,6 @@ fn main() -> Result<()> {
         anyhow::bail!("no command specified; use -- COMMAND or --run PATH");
     }
 
-
     let ruid = nix::unistd::getuid();
     let rgid = nix::unistd::getgid();
     let euid = nix::unistd::geteuid();
@@ -100,9 +99,7 @@ fn main() -> Result<()> {
                 .with_context(|| format!("failed to create {}", dest.display()))?;
             match archive::detect_format(&spec.file)? {
                 archive::ArchiveFormat::Zip => archive::extract_zip(&spec.file, &dest)?,
-                archive::ArchiveFormat::Squashfs => {
-                    archive::extract_squashfs(&spec.file, &dest)?
-                }
+                archive::ArchiveFormat::Squashfs => archive::extract_squashfs(&spec.file, &dest)?,
             }
         }
         // Safety: single-threaded at this point.
@@ -163,8 +160,7 @@ fn main() -> Result<()> {
                         let tmp = pd.join(format!(".tmp-{}", spec.name));
                         std::fs::create_dir_all(&tmp)?;
 
-                        let built_sfs =
-                            archive::zip_to_squashfs(&spec.file, &sfs_path, &tmp)?;
+                        let built_sfs = archive::zip_to_squashfs(&spec.file, &sfs_path, &tmp)?;
 
                         if !built_sfs {
                             // mksquashfs not available — fall back to directory cache.
@@ -444,7 +440,10 @@ mod tests {
         let mut seen = Vec::new();
         parse_archive_specs(&[format!("shared:{p1}")], &mut seen).unwrap();
         let result = parse_archive_specs(&[format!("shared:{p2}")], &mut seen);
-        assert!(result.is_err(), "duplicate name across dynamic/static should be rejected");
+        assert!(
+            result.is_err(),
+            "duplicate name across dynamic/static should be rejected"
+        );
     }
 
     #[test]

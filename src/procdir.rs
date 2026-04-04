@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use nix::mount::{mount, umount2, MntFlags, MsFlags};
+use nix::mount::{MntFlags, MsFlags, mount, umount2};
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -18,8 +18,8 @@ pub fn fuselage_home() -> PathBuf {
 /// Aborts if the directory exists but is owned by a different user.
 pub fn setup_home(home: &Path) -> Result<()> {
     if home.exists() {
-        let meta = fs::metadata(home)
-            .with_context(|| format!("failed to stat {}", home.display()))?;
+        let meta =
+            fs::metadata(home).with_context(|| format!("failed to stat {}", home.display()))?;
         let owner = meta.uid();
         let my_uid = nix::unistd::getuid().as_raw();
         if owner != my_uid {
@@ -31,8 +31,7 @@ pub fn setup_home(home: &Path) -> Result<()> {
             );
         }
     } else {
-        fs::create_dir_all(home)
-            .with_context(|| format!("failed to create {}", home.display()))?;
+        fs::create_dir_all(home).with_context(|| format!("failed to create {}", home.display()))?;
         fs::set_permissions(home, fs::Permissions::from_mode(0o700))
             .with_context(|| format!("failed to set permissions on {}", home.display()))?;
     }
@@ -45,8 +44,8 @@ pub fn clean_stale_procdirs(home: &Path) -> Result<()> {
     if !procdirs.exists() {
         return Ok(());
     }
-    for entry in fs::read_dir(&procdirs)
-        .with_context(|| format!("failed to read {}", procdirs.display()))?
+    for entry in
+        fs::read_dir(&procdirs).with_context(|| format!("failed to read {}", procdirs.display()))?
     {
         let entry = entry?;
         let name = entry.file_name();
@@ -113,7 +112,9 @@ pub fn loop_mount_sfs(sfs: &Path, dest: &Path) -> Result<()> {
         .attach(sfs)
         .with_context(|| format!("failed to attach {} to loop device", sfs.display()))?;
 
-    let loop_path = dev.path().ok_or_else(|| anyhow::anyhow!("loop device has no path"))?;
+    let loop_path = dev
+        .path()
+        .ok_or_else(|| anyhow::anyhow!("loop device has no path"))?;
 
     mount(
         Some(&loop_path),
@@ -182,8 +183,8 @@ pub fn chown_recursive(path: &Path, uid: nix::unistd::Uid, gid: nix::unistd::Gid
     nix::unistd::chown(path, Some(uid), Some(gid))
         .with_context(|| format!("chown failed on {}", path.display()))?;
     if path.is_dir() {
-        for entry in fs::read_dir(path)
-            .with_context(|| format!("failed to read {}", path.display()))?
+        for entry in
+            fs::read_dir(path).with_context(|| format!("failed to read {}", path.display()))?
         {
             chown_recursive(&entry?.path(), uid, gid)?;
         }
@@ -362,7 +363,7 @@ pub(crate) fn reap_cache(cache_dir: &Path, max_age_secs: u64) {
 mod tests {
     use super::*;
     use filetime::{FileTime, set_file_mtime};
-    use std::time::{SystemTime, Duration};
+    use std::time::{Duration, SystemTime};
 
     /// Write an empty file at `dir/name` and optionally backdate its mtime by
     /// `age_secs` seconds relative to now.
@@ -392,8 +393,14 @@ mod tests {
 
         reap_cache(d, 30 * 86400);
 
-        assert!(!d.join("aabbccdd11223344.complete").exists(), "sentinel should be removed");
-        assert!(!d.join("aabbccdd11223344.sfs").exists(), "sfs should be removed");
+        assert!(
+            !d.join("aabbccdd11223344.complete").exists(),
+            "sentinel should be removed"
+        );
+        assert!(
+            !d.join("aabbccdd11223344.sfs").exists(),
+            "sfs should be removed"
+        );
     }
 
     #[test]
@@ -422,8 +429,14 @@ mod tests {
         // Use a very short max_age so age > max_age is true, but recency guard fires.
         reap_cache(d, 10);
 
-        assert!(d.join("aabbccdd11223344.complete").exists(), "recent sentinel must not be removed");
-        assert!(d.join("aabbccdd11223344.sfs").exists(), "recent sfs must not be removed");
+        assert!(
+            d.join("aabbccdd11223344.complete").exists(),
+            "recent sentinel must not be removed"
+        );
+        assert!(
+            d.join("aabbccdd11223344.sfs").exists(),
+            "recent sfs must not be removed"
+        );
     }
 
     // ── Active entries (younger than max_age) ─────────────────────────────────
@@ -453,7 +466,10 @@ mod tests {
 
         reap_cache(d, 30 * 86400);
 
-        assert!(!d.join("aabbccdd11223344.sfs").exists(), "old orphaned sfs should be removed");
+        assert!(
+            !d.join("aabbccdd11223344.sfs").exists(),
+            "old orphaned sfs should be removed"
+        );
     }
 
     #[test]
@@ -465,7 +481,10 @@ mod tests {
 
         reap_cache(d, 30 * 86400);
 
-        assert!(d.join("aabbccdd11223344.sfs").exists(), "young orphaned sfs should be kept");
+        assert!(
+            d.join("aabbccdd11223344.sfs").exists(),
+            "young orphaned sfs should be kept"
+        );
     }
 
     // ── Edge cases ────────────────────────────────────────────────────────────

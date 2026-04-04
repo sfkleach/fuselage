@@ -33,9 +33,9 @@ impl ArchiveSpec {
                 validate_name(&name, arg)?;
                 return Ok(Self {
                     name,
-                    file: whole.canonicalize().with_context(|| {
-                        format!("failed to resolve path {}", whole.display())
-                    })?,
+                    file: whole
+                        .canonicalize()
+                        .with_context(|| format!("failed to resolve path {}", whole.display()))?,
                 });
             }
             // Otherwise treat it as NAME:FILE.
@@ -47,9 +47,9 @@ impl ArchiveSpec {
             }
             Ok(Self {
                 name,
-                file: file.canonicalize().with_context(|| {
-                    format!("failed to resolve path {}", file.display())
-                })?,
+                file: file
+                    .canonicalize()
+                    .with_context(|| format!("failed to resolve path {}", file.display()))?,
             })
         } else {
             let file = Path::new(arg);
@@ -60,9 +60,9 @@ impl ArchiveSpec {
             validate_name(&name, arg)?;
             Ok(Self {
                 name,
-                file: file.canonicalize().with_context(|| {
-                    format!("failed to resolve path {}", file.display())
-                })?,
+                file: file
+                    .canonicalize()
+                    .with_context(|| format!("failed to resolve path {}", file.display()))?,
             })
         }
     }
@@ -96,8 +96,7 @@ fn validate_name(name: &str, source: &str) -> Result<()> {
             source
         );
     }
-    Ok(()
-    )
+    Ok(())
 }
 
 /// Derive an archive name from a file path by stripping the directory
@@ -115,8 +114,8 @@ fn stem(path: &str) -> String {
 
 /// Detect the archive format by reading the first 4 magic bytes.
 pub fn detect_format(path: &Path) -> Result<ArchiveFormat> {
-    let mut f = fs::File::open(path)
-        .with_context(|| format!("failed to open {}", path.display()))?;
+    let mut f =
+        fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let mut magic = [0u8; 4];
     f.read_exact(&mut magic)
         .with_context(|| format!("failed to read magic bytes from {}", path.display()))?;
@@ -133,8 +132,8 @@ pub fn detect_format(path: &Path) -> Result<ArchiveFormat> {
 
 /// Compute the SHA-256 hash of a file and return the first 16 hex characters.
 pub fn compute_sha256(path: &Path) -> Result<String> {
-    let mut f = fs::File::open(path)
-        .with_context(|| format!("failed to open {}", path.display()))?;
+    let mut f =
+        fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 65536];
     loop {
@@ -150,8 +149,8 @@ pub fn compute_sha256(path: &Path) -> Result<String> {
 
 /// Extract a zip archive into `dest`.
 pub fn extract_zip(archive: &Path, dest: &Path) -> Result<()> {
-    let file = fs::File::open(archive)
-        .with_context(|| format!("failed to open {}", archive.display()))?;
+    let file =
+        fs::File::open(archive).with_context(|| format!("failed to open {}", archive.display()))?;
     let mut zip = zip::ZipArchive::new(file)
         .with_context(|| format!("not a valid zip archive: {}", archive.display()))?;
     zip.extract(dest).with_context(|| {

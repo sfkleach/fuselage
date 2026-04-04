@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use nix::mount::{mount, MsFlags};
-use nix::sched::{unshare, CloneFlags};
+use nix::mount::{MsFlags, mount};
+use nix::sched::{CloneFlags, unshare};
 use std::fs;
 
 /// Enter a private mount namespace.

@@ -9,7 +9,7 @@
 
 ### Automated testing
 
-- The complete set of tests must pass. These can be automatically run using `just test`, which is responsible for running unit tests, functional tests, formatting checks, checking all executables build, and running `gosec`.
+- The complete set of tests must pass. These can be automatically run using `just test`, which is responsible for running unit tests, functional tests, formatting checks, checking all executables build, and running security checks.
 - The `test` recipe in `Justfile` must try building all the executables with all combinations of build flags.
 
 ## Step (story) criteria, constantly maintained
