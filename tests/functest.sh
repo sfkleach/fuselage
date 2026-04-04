@@ -57,11 +57,18 @@ mkdir -p "$WORKDIR"
 trap 'rm -rf "$(dirname "$0")/../_build/functest-fixtures"' EXIT
 
 # Create a small zip containing a text file.
+# Use ZipInfo with explicit external_attr so files get mode 0644 on extraction.
+# writestr(name, data) leaves external_attr=0, which produces mode 0000 on
+# Linux — unreadable by non-root users (breaks setuid mode tests).
 python3 - <<EOF
-import zipfile, os
+import zipfile
+def zinfo(name, mode=0o644):
+    zi = zipfile.ZipInfo(name)
+    zi.external_attr = (mode << 16)
+    return zi
 z = zipfile.ZipFile("$WORKDIR/data.zip", "w")
-z.writestr("hello.txt", "hello from archive\n")
-z.writestr("subdir/nested.txt", "nested content\n")
+z.writestr(zinfo("hello.txt"), "hello from archive\n")
+z.writestr(zinfo("subdir/nested.txt"), "nested content\n")
 z.close()
 EOF
 
@@ -183,24 +190,27 @@ check "static archive is read-only" \
     "$FUSELAGE" --static="$WORKDIR/data.zip" -- \
         sh -c '! touch "$FUSELAGE_STATIC/data/probe" 2>/dev/null'
 
-# No cache written without --cache-static.
+# Compute the cache key for data.zip (first 16 hex chars of sha256).
+# This matches the logic in archive::compute_sha256.
+DATA_HASH=$(sha256sum "$WORKDIR/data.zip" | cut -c1-16)
 CACHE_DIR="$HOME/.fuselage/cache"
-CACHE_BEFORE=$(find "$CACHE_DIR" -name "*.complete" 2>/dev/null | wc -l || echo 0)
+# Remove any pre-existing cache entry for this fixture so the miss test is reliable.
+rm -f "$CACHE_DIR/$DATA_HASH.sfs" "$CACHE_DIR/$DATA_HASH.complete"
+
+# No cache written without --cache-static.
 "$FUSELAGE" --static="$WORKDIR/data.zip" -- true >/dev/null 2>&1 || true
-CACHE_AFTER=$(find "$CACHE_DIR" -name "*.complete" 2>/dev/null | wc -l || echo 0)
-if [[ "$CACHE_AFTER" -eq "$CACHE_BEFORE" ]]; then
+if [[ ! -f "$CACHE_DIR/$DATA_HASH.complete" ]]; then
     pass "no cache written without --cache-static"
 else
-    fail "no cache written without --cache-static (cache grew from $CACHE_BEFORE to $CACHE_AFTER)"
+    fail "no cache written without --cache-static (sentinel appeared)"
 fi
 
-# --cache-static writes a cache entry.
+# --cache-static writes a cache entry (cache miss path).
 "$FUSELAGE" --cache-static --static="$WORKDIR/data.zip" -- true >/dev/null 2>&1 || true
-CACHE_AFTER2=$(find "$CACHE_DIR" -name "*.complete" 2>/dev/null | wc -l || echo 0)
-if [[ "$CACHE_AFTER2" -gt "$CACHE_AFTER" ]]; then
+if [[ -f "$CACHE_DIR/$DATA_HASH.complete" ]]; then
     pass "--cache-static writes cache entry"
 else
-    fail "--cache-static writes cache entry (count unchanged at $CACHE_AFTER2)"
+    fail "--cache-static writes cache entry (sentinel missing)"
 fi
 
 # Cache hit: second run with same archive and --cache-static succeeds.
@@ -273,9 +283,12 @@ if [[ "$MODE" == "setuid" ]]; then
     check_output "real uid preserved in namespace" "$REAL_USER" \
         "$FUSELAGE" -- whoami
 
-    # sudo is functional inside the namespace.
-    check "sudo available inside namespace" \
-        "$FUSELAGE" -- sudo -n true
+    # In setuid mode fuselage uses a plain mount namespace (not a user namespace).
+    # The uid_map for a plain mount namespace is the identity mapping over the
+    # full uid range: "0 0 4294967295". In a user namespace it would be a
+    # narrow mapping such as "0 1000 1".
+    check "no user namespace in setuid mode" \
+        "$FUSELAGE" -- sh -c "grep -qE '^[[:space:]]*0[[:space:]]+0[[:space:]]+4294967295' /proc/self/uid_map"
 
     echo ""
 fi
