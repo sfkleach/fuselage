@@ -6,7 +6,7 @@ sandboxed but they are provided with private sub-folders for the use by
 themselves and their child-processes. The private sub-folders are automatically
 cleaned up after the sub-command finishes. 
 
-## Collaboration Guidelines
+## General Guidance
 
 When providing technical assistance:
 
@@ -18,9 +18,10 @@ When providing technical assistance:
 
 The goal is to build robust, well-designed software, not to avoid technical disagreements.
 
+## Specific Collaboration Rules
 
-## Collaboration Guidelines
-
+- Never run `sudo` commands without my consent and ensure that the fact it is a sudo
+  command is clearly indicated.
 - Do not create artefacts within the repository folder structure
 - EXCEPT in folders starting with an underscore, such as  `_build/`.
 - Design decisions should be documents in the `docs/decisions/` folder using
@@ -29,6 +30,11 @@ The goal is to build robust, well-designed software, not to avoid technical disa
   section may be omitted and we simply document the reasoning behind the decision.
 
 ## Programming Guidelines
+
+- `rm -rf` is only permitted in scripts where a segment of the path is a
+  literal string that is visible in the script, so the scope of deletion is clearly
+  bounded. For example `rm -rf _build/functest-fixtures` is acceptable;
+  `rm -rf "$WORKDIR"` is not, because `$WORKDIR` could expand to anything.
 
 - Comments should be proper sentences, with correct grammar and punctuation,
   including the use of capitalization and periods.

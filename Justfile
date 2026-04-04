@@ -1,7 +1,7 @@
 default:
     @just --list
 
-test: unittest lint fmt-check audit build functest
+test: unittest lint fmt-check audit build-debug functest
 
 unittest:
     cargo test
@@ -29,34 +29,42 @@ fmt:
 fmt-check:
     cargo fmt --check
 
-build:
+build-debug:
     cargo build
+    ls -alh target/debug/fuselage
 
 build-release:
     cargo build --release
     ls -alh target/release/fuselage
 
-functest-plain:
-    # Functional tests for the plain binary
+clear-executable-debug:
     rm -f target/debug/fuselage
-    cargo build
-    # Run functional tests on target/debug/fuselage
-    # ...
 
-functest-setuid:
-    # Functional tests for the setuid binary
+clear-executable-release:
     rm -f target/release/fuselage
-    cargo build --release
-    sudo chown root:root target/release/fuselage
-    sudo chmod u+s target/release/fuselage
-    # Run functional tests on target/release/fuselage
-    # ...
 
-functest: functest-plain functest-setuid
+clear-executables: clear-executable-debug clear-executable-release
 
-setuid:
+functest-debug: clear-executable-debug build-debug functest-debug-run
+
+functest-debug-run:
+    bash tests/functest.sh target/debug/fuselage plain
+
+functest-setuid-run:
+    bash tests/functest.sh target/release/fuselage setuid
+
+functest-setuid: clear-executable-release build-release setuid-release functest-setuid-run
+
+functest: functest-debug functest-setuid
+
+
+setuid-debug:
     sudo chown root:root target/debug/fuselage
     sudo chmod u+s target/debug/fuselage
+
+setuid-release:
+    sudo chown root:root target/release/fuselage
+    sudo chmod u+s target/release/fuselage
 
 install:
     cargo install --path .
