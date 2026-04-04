@@ -29,3 +29,13 @@ the $PATH is searched, otherwise it is treated as a file path.
 When the fuselage binary is setuid as root, set up the TMPDIR and then drop
 root privileges. (In this mode it should be possible to run sudo within the
 shell.)
+
+
+## Step 3
+
+Now implement the `-d,--dynamic=[NAME:]ARCHIVE` option. At this point the only archive
+format we will support is _zip_. This will mount the contents of the zip archive
+in the `$FUSELAGE_DYNAMIC` folder. 
+
+The name of the mount will be specified by NAME or fall-back to the file-name 
+stem of ARCHIVE.

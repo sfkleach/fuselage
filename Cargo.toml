@@ -20,3 +20,10 @@ nix = { version = "0.29", features = ["mount", "user", "sched", "signal", "proce
 # Error handling
 anyhow = "1"
 thiserror = "2"
+
+[profile.release]
+strip = true        # strip symbols (already happening, but makes it explicit)
+opt-level = "z"     # optimise for size instead of speed
+lto = true          # link-time optimisation removes dead code across crates
+codegen-units = 1   # slower build but better LTO
+
