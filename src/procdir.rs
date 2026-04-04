@@ -266,16 +266,16 @@ pub fn spawn_cache_reaper(cache_dir: &Path) {
 /// bits are touched; group/other permissions are left unchanged.
 fn make_dir_tree_writable(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
-    if let Ok(meta) = fs::metadata(path) {
-        if meta.is_dir() {
-            let mode = meta.permissions().mode();
-            if mode & 0o200 == 0 {
-                let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode | 0o700));
-            }
-            if let Ok(entries) = fs::read_dir(path) {
-                for entry in entries.flatten() {
-                    make_dir_tree_writable(&entry.path());
-                }
+    if let Ok(meta) = fs::metadata(path)
+        && meta.is_dir()
+    {
+        let mode = meta.permissions().mode();
+        if mode & 0o200 == 0 {
+            let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode | 0o700));
+        }
+        if let Ok(entries) = fs::read_dir(path) {
+            for entry in entries.flatten() {
+                make_dir_tree_writable(&entry.path());
             }
         }
     }

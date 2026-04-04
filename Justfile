@@ -1,7 +1,7 @@
 default:
     @just --list
 
-test: unittest lint fmt-check audit build-debug functest
+test: unittest lint fmt-check audit functest
 
 unittest:
     cargo test
@@ -45,7 +45,12 @@ clear-executable-release:
 
 clear-executables: clear-executable-debug clear-executable-release
 
-functest-debug: clear-executable-debug build-debug functest-debug-run
+functest-debug:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rm -f target/debug/fuselage
+    cargo build
+    bash tests/functest.sh target/debug/fuselage plain
 
 functest-debug-run:
     bash tests/functest.sh target/debug/fuselage plain
@@ -53,18 +58,42 @@ functest-debug-run:
 functest-setuid-run:
     bash tests/functest.sh target/release/fuselage setuid
 
-functest-setuid: clear-executable-release build-release setuid-release functest-setuid-run
+functest-setuid:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rm -f target/release/fuselage
+    cargo build --release
+    if [ "$(id -u)" = "0" ]; then
+        chown root:root target/release/fuselage
+        chmod u+s target/release/fuselage
+    else
+        sudo chown root:root target/release/fuselage
+        sudo chmod u+s target/release/fuselage
+    fi
+    bash tests/functest.sh target/release/fuselage setuid
 
 functest: functest-debug functest-setuid
 
 
 setuid-debug:
-    sudo chown root:root target/debug/fuselage
-    sudo chmod u+s target/debug/fuselage
+    #!/usr/bin/env bash
+    if [ "$(id -u)" = "0" ]; then
+        chown root:root target/debug/fuselage
+        chmod u+s target/debug/fuselage
+    else
+        sudo chown root:root target/debug/fuselage
+        sudo chmod u+s target/debug/fuselage
+    fi
 
 setuid-release:
-    sudo chown root:root target/release/fuselage
-    sudo chmod u+s target/release/fuselage
+    #!/usr/bin/env bash
+    if [ "$(id -u)" = "0" ]; then
+        chown root:root target/release/fuselage
+        chmod u+s target/release/fuselage
+    else
+        sudo chown root:root target/release/fuselage
+        sudo chmod u+s target/release/fuselage
+    fi
 
 install:
     cargo install --path .
