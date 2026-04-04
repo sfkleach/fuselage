@@ -1,6 +1,8 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
+use nix::unistd::{Gid, Uid};
 use std::ffi::CString;
+use std::path::Path;
 
 mod archive;
 mod namespace;
@@ -45,6 +47,19 @@ fn main() -> Result<()> {
         anyhow::bail!("no command specified; use -- COMMAND or --run PATH");
     }
 
+    let ruid = nix::unistd::getuid();
+    let rgid = nix::unistd::getgid();
+    let euid = nix::unistd::geteuid();
+
+    // Setuid mode: binary is installed setuid-root, caller is an ordinary user.
+    // In this mode we have CAP_SYS_ADMIN (euid=0) but we want files created in
+    // ~/.fuselage to be owned by the real user, so we temporarily drop euid.
+    let is_setuid = euid.is_root() && !ruid.is_root();
+
+    if is_setuid {
+        nix::unistd::seteuid(ruid).context("seteuid: failed to drop to real uid")?;
+    }
+
     // Verify/create ~/.fuselage/ before entering the namespace so that
     // ownership checks use the real uid.
     let home = procdir::fuselage_home();
@@ -55,14 +70,29 @@ fn main() -> Result<()> {
     // Inside the namespace this directory will be covered by a tmpfs.
     let pd = procdir::create_procdir(&home)?;
 
-    // Enter a private mount namespace (user namespace for unprivileged callers).
+    if is_setuid {
+        // Restore euid=0 so we have CAP_SYS_ADMIN for the namespace and mount calls.
+        nix::unistd::seteuid(Uid::from_raw(0)).context("seteuid: failed to restore root")?;
+    }
+
+    // Enter a private mount namespace (plain for root/setuid, user+mount for unprivileged).
     namespace::enter_namespace()?;
 
     // Mount a tmpfs over the procdir and create tmp/ inside it.
     procdir::setup_procdir_in_namespace(&pd)?;
 
-    // Set FUSELAGE_TMPDIR so the child process can find its scratch space.
     let tmpdir = pd.join("tmp");
+
+    if is_setuid {
+        // The tmpfs was mounted as root; chown its root and tmp/ to the real user
+        // so the command can write there without needing root.
+        nix::unistd::chown(&pd, Some(ruid), Some(rgid))
+            .context("chown: failed to transfer procdir to real user")?;
+        nix::unistd::chown(&tmpdir, Some(ruid), Some(rgid))
+            .context("chown: failed to transfer tmpdir to real user")?;
+    }
+
+    // Set FUSELAGE_TMPDIR so the child process can find its scratch space.
     // Safety: single-threaded at this point (we haven't forked yet).
     unsafe { std::env::set_var("FUSELAGE_TMPDIR", &tmpdir) };
 
@@ -81,17 +111,49 @@ fn main() -> Result<()> {
         );
     }
 
-    run_with_cleanup(&prog, &argv, &pd)
+    // In setuid mode the child drops to the real uid/gid before exec so that
+    // sudo and normal uid semantics work inside the command.
+    // The parent keeps root so it can umount the tmpfs and rmdir the procdir
+    // after the child exits.
+    let drop_to = is_setuid.then_some((ruid, rgid));
+
+    run_with_cleanup(&prog, &argv, &pd, drop_to)
 }
 
 /// Fork, exec `prog` with `argv` in the child, wait for it in the parent,
 /// then clean up the procdir before exiting with the child's exit code.
-fn run_with_cleanup(prog: &CString, argv: &[CString], procdir: &std::path::Path) -> Result<()> {
+///
+/// If `drop_to` is `Some((uid, gid))`, the child permanently drops privileges
+/// to that uid/gid before exec (setuid mode). The parent retains its privileges
+/// for cleanup.
+fn run_with_cleanup(
+    prog: &CString,
+    argv: &[CString],
+    procdir: &Path,
+    drop_to: Option<(Uid, Gid)>,
+) -> Result<()> {
     use nix::sys::wait::{waitpid, WaitStatus};
     use nix::unistd::{fork, ForkResult};
 
     match unsafe { fork() }.context("fork failed")? {
         ForkResult::Child => {
+            if let Some((uid, gid)) = drop_to {
+                // Drop supplementary groups, then gid, then uid.
+                // setresuid/setresgid set real, effective, and saved-set to the same value,
+                // making the drop permanent and irreversible.
+                if let Err(e) = nix::unistd::setgroups(&[gid]) {
+                    eprintln!("fuselage: setgroups failed: {e}");
+                    std::process::exit(1);
+                }
+                if let Err(e) = nix::unistd::setresgid(gid, gid, gid) {
+                    eprintln!("fuselage: setresgid failed: {e}");
+                    std::process::exit(1);
+                }
+                if let Err(e) = nix::unistd::setresuid(uid, uid, uid) {
+                    eprintln!("fuselage: setresuid failed: {e}");
+                    std::process::exit(1);
+                }
+            }
             // execvp searches $PATH when `prog` contains no slash, matching `env` semantics.
             let err = nix::unistd::execvp(prog, argv).unwrap_err();
             eprintln!("fuselage: exec {:?}: {}", prog, err);
@@ -113,5 +175,3 @@ fn run_with_cleanup(prog: &CString, argv: &[CString], procdir: &std::path::Path)
         }
     }
 }
-
-use anyhow::Context;

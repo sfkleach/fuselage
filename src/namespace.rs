@@ -11,10 +11,14 @@ use std::fs;
 ///
 /// For root callers, only a mount namespace is created.
 pub fn enter_namespace() -> Result<()> {
+    // Use effective uid: a setuid-root binary has euid=0 but ruid=real_user.
+    // In that case we want a plain mount namespace (we already have CAP_SYS_ADMIN),
+    // not a user namespace.
+    let euid = nix::unistd::geteuid();
     let uid = nix::unistd::getuid();
     let gid = nix::unistd::getgid();
 
-    if uid.is_root() {
+    if euid.is_root() {
         unshare(CloneFlags::CLONE_NEWNS).context(
             "failed to create mount namespace; try running as root or with user namespace support",
         )?;
