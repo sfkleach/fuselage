@@ -30,7 +30,11 @@ fmt-check:
     cargo fmt --check
 
 build:
-    cargo build --release
+    cargo build
+
+setuid:
+    sudo chown root:root target/debug/fuselage
+    sudo chmod u+s target/debug/fuselage
 
 install:
     cargo install --path .
