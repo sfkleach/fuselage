@@ -178,6 +178,9 @@ fn main() -> Result<()> {
                         std::fs::remove_dir_all(&tmp).ok();
                         std::fs::File::create(&sentinel)
                             .context("failed to write cache sentinel")?;
+                    } else {
+                        // Cache hit — refresh sentinel mtime to record last use.
+                        procdir::touch_sentinel(&sentinel)?;
                     }
 
                     if sfs_path.exists() {
@@ -248,7 +251,7 @@ fn main() -> Result<()> {
     // The parent keeps root so it can umount the tmpfs and rmdir the procdir.
     let drop_to = is_setuid.then_some((ruid, rgid));
 
-    run_with_cleanup(&prog, &argv, &pd, drop_to)
+    run_with_cleanup(&prog, &argv, &pd, drop_to, &cache_dir)
 }
 
 /// Parse a list of `[NAME:]FILE` specs, accumulating names into `seen`.
@@ -285,6 +288,7 @@ fn run_with_cleanup(
     argv: &[CString],
     procdir: &Path,
     drop_to: Option<(Uid, Gid)>,
+    cache_dir: &Path,
 ) -> Result<()> {
     use nix::sys::wait::{WaitStatus, waitpid};
     use nix::unistd::{ForkResult, fork};
@@ -313,6 +317,7 @@ fn run_with_cleanup(
         ForkResult::Parent { child } => {
             let status = waitpid(child, None).context("waitpid failed")?;
             procdir::cleanup_procdir(procdir);
+            procdir::spawn_cache_reaper(cache_dir);
             match status {
                 WaitStatus::Exited(_, code) => std::process::exit(code),
                 WaitStatus::Signaled(_, sig, _) => {

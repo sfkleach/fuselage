@@ -78,3 +78,7 @@ While fuselage is running, it should periodically update the last-access time of
 any cache in use (which allows for many fuselage processes to be using the same
 cache). 
 
+## Step 7, Cache Expiry Mechanism (Revised)
+
+Implement a cache expiry mechanism as described in [the decision record on cache expiry](../decisions/0001-cache-expiry-mechanism/0001-cache-expiry-mechanism.md).
+

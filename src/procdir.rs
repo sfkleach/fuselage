@@ -198,3 +198,162 @@ pub fn cleanup_procdir(procdir: &Path) {
     let _ = umount2(procdir, MntFlags::MNT_DETACH);
     let _ = fs::remove_dir(procdir);
 }
+
+/// Touch a cache sentinel file to record the current time as last-use time.
+///
+/// Sentinel files are always empty, so overwriting with zero bytes is safe
+/// and portably updates the mtime without requiring utimensat(2).
+pub fn touch_sentinel(path: &Path) -> Result<()> {
+    fs::write(path, b"").with_context(|| format!("failed to touch sentinel {}", path.display()))
+}
+
+/// Spawn a double-forked background process that evicts stale cache entries.
+///
+/// The reaper runs after the parent has already exited (`std::process::exit`
+/// is called after this returns), so no explicit wait is needed for the
+/// grandchild — it is re-parented to init.
+///
+/// Expiry threshold is read from `FUSELAGE_CACHE_MAX_AGE_DAYS` (default 30).
+/// Setting it to `0` disables reaping entirely.
+///
+/// Errors are silently ignored: the cache is a performance aid, not a
+/// critical resource.
+pub fn spawn_cache_reaper(cache_dir: &Path) {
+    if !cache_dir.exists() {
+        return;
+    }
+
+    let max_age_days: u64 = std::env::var("FUSELAGE_CACHE_MAX_AGE_DAYS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+
+    if max_age_days == 0 {
+        return;
+    }
+
+    let max_age_secs = max_age_days.saturating_mul(86400);
+    let cache_dir = cache_dir.to_path_buf();
+
+    // Double-fork: intermediate child exits immediately, grandchild is
+    // re-parented to init and performs the reap without blocking the parent.
+    unsafe {
+        use nix::unistd::{ForkResult, fork};
+        match fork() {
+            Ok(ForkResult::Child) => {
+                match fork() {
+                    Ok(ForkResult::Child) => {
+                        reap_cache(&cache_dir, max_age_secs);
+                        std::process::exit(0);
+                    }
+                    _ => std::process::exit(0), // intermediate child exits immediately
+                }
+            }
+            Ok(ForkResult::Parent { child }) => {
+                // Wait for intermediate child (exits immediately — no zombie).
+                let _ = nix::sys::wait::waitpid(child, None);
+            }
+            Err(_) => {} // ignore fork errors
+        }
+    }
+}
+
+/// Recursively ensure every directory in `path` is writable by the owner.
+///
+/// Required before `remove_dir_all` when the tree may contain directories
+/// extracted from archives with mode 0555 (no write bit).  Only the owner
+/// bits are touched; group/other permissions are left unchanged.
+fn make_dir_tree_writable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = fs::metadata(path) {
+        if meta.is_dir() {
+            let mode = meta.permissions().mode();
+            if mode & 0o200 == 0 {
+                let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode | 0o700));
+            }
+            if let Ok(entries) = fs::read_dir(path) {
+                for entry in entries.flatten() {
+                    make_dir_tree_writable(&entry.path());
+                }
+            }
+        }
+    }
+}
+
+/// Evict stale entries from the cache directory.
+///
+/// Rules:
+/// - `.complete` sentinels older than `max_age_secs` are removed along with
+///   their `.sfs` file and extracted directory.
+/// - Sentinels touched within the last 60 seconds are always kept (recency
+///   guard prevents racing with a concurrent fuselage that just wrote them).
+/// - Orphaned `.sfs` files (no matching `.complete`) older than 1 hour are
+///   removed (interrupted builds).
+fn reap_cache(cache_dir: &Path, max_age_secs: u64) {
+    const RECENCY_GUARD_SECS: u64 = 60;
+    const ORPHAN_AGE_SECS: u64 = 3600;
+
+    let now = std::time::SystemTime::now();
+
+    let entries = match fs::read_dir(cache_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    let mut sfs_stems: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut to_evict: Vec<String> = Vec::new(); // stems to evict
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy().into_owned();
+
+        if let Some(stem) = name_str.strip_suffix(".complete") {
+            let age = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| now.duration_since(t).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+
+            if age >= RECENCY_GUARD_SECS && age > max_age_secs {
+                to_evict.push(stem.to_string());
+            }
+        } else if let Some(stem) = name_str.strip_suffix(".sfs") {
+            sfs_stems.insert(stem.to_string());
+        }
+    }
+
+    // Remove stale entries (sfs + directory + sentinel).
+    for stem in &to_evict {
+        let _ = fs::remove_file(cache_dir.join(format!("{stem}.sfs")));
+        let dir = cache_dir.join(stem);
+        if dir.exists() {
+            make_dir_tree_writable(&dir);
+            let _ = fs::remove_dir_all(&dir);
+        }
+        let _ = fs::remove_file(cache_dir.join(format!("{stem}.complete")));
+    }
+
+    // Remove orphaned .sfs files (no sentinel) that are old enough.
+    let evicted: std::collections::HashSet<&str> = to_evict.iter().map(String::as_str).collect();
+    for stem in &sfs_stems {
+        if evicted.contains(stem.as_str()) {
+            continue; // already removed above
+        }
+        let sentinel = cache_dir.join(format!("{stem}.complete"));
+        if sentinel.exists() {
+            continue; // sentinel present — not orphaned
+        }
+        let sfs = cache_dir.join(format!("{stem}.sfs"));
+        let age = fs::metadata(&sfs)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| now.duration_since(t).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if age > ORPHAN_AGE_SECS {
+            let _ = fs::remove_file(&sfs);
+        }
+    }
+}
