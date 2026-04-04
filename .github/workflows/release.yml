@@ -67,4 +67,6 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         body_path: ${{ steps.notes.outputs.notes_file }}
+        prerelease: ${{ contains(github.ref_name, '-rc') }}
+        draft: ${{ contains(github.ref_name, '-') && !contains(github.ref_name, '-rc') }}
         files: ${{ steps.package.outputs.archive }}
