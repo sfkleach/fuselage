@@ -1,5 +1,7 @@
 # fuselage
 
+[![Build and Test](https://github.com/sfkleach/fuselage/actions/workflows/build-and-test.yml/badge.svg?branch=main)](https://github.com/sfkleach/fuselage/actions/workflows/build-and-test.yml)
+
 Run a command with ephemeral, namespace-private filesystems derived from zip archives.
 No containers, no daemons, no manual cleanup.
 
