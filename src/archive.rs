@@ -182,12 +182,11 @@ pub fn extract_squashfs(sfs: &Path, dest: &Path) -> Result<()> {
         let out = dest.join(rel);
 
         match &node.inner {
-            InnerNode::Dir(_) => {
-                if out != dest {
-                    fs::create_dir_all(&out)
-                        .with_context(|| format!("failed to create dir {}", out.display()))?;
-                }
+            InnerNode::Dir(_) if out != dest => {
+                fs::create_dir_all(&out)
+                    .with_context(|| format!("failed to create dir {}", out.display()))?;
             }
+            InnerNode::Dir(_) => {}
             InnerNode::File(file_reader) => {
                 if let Some(parent) = out.parent() {
                     fs::create_dir_all(parent)?;
