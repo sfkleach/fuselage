@@ -68,8 +68,8 @@ jobs:
     - name: Build fuselage
       run: |
         cargo build --release
-        chown root:root target/release/fuselage
-        chmod u+s target/release/fuselage
+        sudo chown root:root target/release/fuselage
+        sudo chmod u+s target/release/fuselage
 
     - name: Test ephemeral tmpdir
       shell: bash
