@@ -7,7 +7,7 @@ unittest:
     cargo test
 
 lint:
-    cargo clippy -- -D warnings
+    cargo clippy --all-targets -- -D warnings
 
 audit:
     @echo "Running security audit..."

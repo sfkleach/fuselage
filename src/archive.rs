@@ -216,6 +216,46 @@ pub fn extract_squashfs(sfs: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Convert a zip archive to a squashfs image at `sfs_dest` by extracting to
+/// `tmp_dir` and running `mksquashfs`.
+///
+/// Returns `true` if the squashfs was built successfully, or `false` if
+/// `mksquashfs` is not installed (caller should fall back to a directory cache).
+/// Returns an error if mksquashfs was found but failed.
+pub fn zip_to_squashfs(zip: &Path, sfs_dest: &Path, tmp_dir: &Path) -> Result<bool> {
+    // Check whether mksquashfs is on PATH before doing any work.
+    if std::process::Command::new("mksquashfs")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_err()
+    {
+        return Ok(false);
+    }
+
+    extract_zip(zip, tmp_dir)?;
+
+    let status = std::process::Command::new("mksquashfs")
+        .args([
+            tmp_dir.as_os_str(),
+            sfs_dest.as_os_str(),
+            "-comp".as_ref(),
+            "zstd".as_ref(),
+            "-Xcompression-level".as_ref(),
+            "1".as_ref(),
+            "-noappend".as_ref(),
+            "-quiet".as_ref(),
+        ])
+        .status()
+        .context("failed to run mksquashfs")?;
+
+    if !status.success() {
+        anyhow::bail!("mksquashfs exited with status {:?}", status.code());
+    }
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,44 +414,4 @@ mod tests {
     fn validate_name_rejects_null_byte() {
         assert!(validate_name("foo\0bar", "foo\0bar.zip").is_err());
     }
-}
-
-/// Convert a zip archive to a squashfs image at `sfs_dest` by extracting to
-/// `tmp_dir` and running `mksquashfs`.
-///
-/// Returns `true` if the squashfs was built successfully, or `false` if
-/// `mksquashfs` is not installed (caller should fall back to a directory cache).
-/// Returns an error if mksquashfs was found but failed.
-pub fn zip_to_squashfs(zip: &Path, sfs_dest: &Path, tmp_dir: &Path) -> Result<bool> {
-    // Check whether mksquashfs is on PATH before doing any work.
-    if std::process::Command::new("mksquashfs")
-        .arg("-version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_err()
-    {
-        return Ok(false);
-    }
-
-    extract_zip(zip, tmp_dir)?;
-
-    let status = std::process::Command::new("mksquashfs")
-        .args([
-            tmp_dir.as_os_str(),
-            sfs_dest.as_os_str(),
-            "-comp".as_ref(),
-            "zstd".as_ref(),
-            "-Xcompression-level".as_ref(),
-            "1".as_ref(),
-            "-noappend".as_ref(),
-            "-quiet".as_ref(),
-        ])
-        .status()
-        .context("failed to run mksquashfs")?;
-
-    if !status.success() {
-        anyhow::bail!("mksquashfs exited with status {:?}", status.code());
-    }
-    Ok(true)
 }
