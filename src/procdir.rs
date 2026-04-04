@@ -89,6 +89,32 @@ pub fn setup_procdir_in_namespace(procdir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Bind-mount `path` onto itself and then remount it read-only.
+///
+/// A bind-mount is required first because the kernel won't let you remount
+/// a plain directory read-only — only an existing mount point.
+pub fn bind_mount_readonly(path: &Path) -> Result<()> {
+    mount(
+        Some(path),
+        path,
+        None::<&str>,
+        MsFlags::MS_BIND,
+        None::<&str>,
+    )
+    .with_context(|| format!("bind-mount failed on {}", path.display()))?;
+
+    mount(
+        None::<&str>,
+        path,
+        None::<&str>,
+        MsFlags::MS_BIND | MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY,
+        None::<&str>,
+    )
+    .with_context(|| format!("remount read-only failed on {}", path.display()))?;
+
+    Ok(())
+}
+
 /// Recursively chown a directory tree to `uid`/`gid`.
 ///
 /// Used in setuid mode to hand ownership of the tmpfs contents to the real user

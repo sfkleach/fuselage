@@ -39,3 +39,14 @@ in the `$FUSELAGE_DYNAMIC` folder.
 
 The name of the mount will be specified by NAME or fall-back to the file-name 
 stem of ARCHIVE.
+
+## Step 4
+
+Now implement the `--static=[NAME:]ARCHIVE` option. Again we are only looking to
+support a zip archive at this point in time. This will mount the contents of the
+zip archive in a read only folder in `$FUSELAGE_STATIC`. 
+
+For this iteration we will not implement caching of the extracted folder. In 
+Step 5 we will look at different ways to improve the loading speed.
+
+

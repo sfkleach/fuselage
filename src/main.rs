@@ -17,7 +17,7 @@ struct Args {
     dynamic: Vec<String>,
 
     /// Extract FILE into a cached, read-only directory (may be repeated)
-    #[arg(long = "static", value_name = "[NAME:]FILE")]
+    #[arg(short = 's', long = "static", value_name = "[NAME:]FILE")]
     r#static: Vec<String>,
 
     /// Find PATH in extracted archives and execute it
@@ -83,8 +83,13 @@ fn main() -> Result<()> {
 
     let tmpdir = pd.join("tmp");
 
-    // Process --dynamic archives: parse specs, check for duplicates, extract.
-    let dynamic_specs = parse_archive_specs(&args.dynamic)?;
+    // Parse all archive specs up front so duplicate names across --dynamic and
+    // --static are caught before any extraction begins.
+    let mut seen_names: Vec<String> = Vec::new();
+    let dynamic_specs = parse_archive_specs(&args.dynamic, &mut seen_names)?;
+    let static_specs = parse_archive_specs(&args.r#static, &mut seen_names)?;
+
+    // Process --dynamic archives: extract zip into pd/dynamic/NAME/.
     if !dynamic_specs.is_empty() {
         let dynamic_root = pd.join("dynamic");
         for spec in &dynamic_specs {
@@ -97,11 +102,29 @@ fn main() -> Result<()> {
         unsafe { std::env::set_var("FUSELAGE_DYNAMIC", &dynamic_root) };
     }
 
+    // Extract --static archives into pd/static/NAME/ (not yet read-only).
+    let static_root = pd.join("static");
+    if !static_specs.is_empty() {
+        for spec in &static_specs {
+            let dest = static_root.join(&spec.name);
+            std::fs::create_dir_all(&dest)
+                .with_context(|| format!("failed to create {}", dest.display()))?;
+            archive::extract_zip(&spec.file, &dest)?;
+        }
+        // Safety: single-threaded at this point.
+        unsafe { std::env::set_var("FUSELAGE_STATIC", &static_root) };
+    }
+
     if is_setuid {
         // All dirs and extracted files were created as root. Recursively chown
-        // the entire procdir to the real user so the child can access everything.
+        // the entire procdir to the real user before locking anything read-only.
         procdir::chown_recursive(&pd, ruid, rgid)
             .context("failed to chown procdir to real user")?;
+    }
+
+    // Now lock each static archive directory read-only.
+    for spec in &static_specs {
+        procdir::bind_mount_readonly(&static_root.join(&spec.name))?;
     }
 
     // Set FUSELAGE_TMPDIR so the child process can find its scratch space.
@@ -132,10 +155,12 @@ fn main() -> Result<()> {
     run_with_cleanup(&prog, &argv, &pd, drop_to)
 }
 
-/// Parse a list of `[NAME:]FILE` specs, returning an error on duplicate names.
-fn parse_archive_specs(raw: &[String]) -> Result<Vec<archive::ArchiveSpec>> {
+/// Parse a list of `[NAME:]FILE` specs, accumulating names into `seen`.
+///
+/// Pass the same `seen` for both `--dynamic` and `--static` to catch
+/// duplicates across the two flags.
+fn parse_archive_specs(raw: &[String], seen: &mut Vec<String>) -> Result<Vec<archive::ArchiveSpec>> {
     let mut specs = Vec::new();
-    let mut seen: Vec<String> = Vec::new();
     for arg in raw {
         let spec = archive::ArchiveSpec::parse(arg)?;
         if seen.contains(&spec.name) {
