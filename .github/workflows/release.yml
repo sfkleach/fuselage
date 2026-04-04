@@ -9,11 +9,19 @@ permissions:
   contents: write
 
 jobs:
+  check-changelog:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Check CHANGELOG top section matches tag
+      run: python3 scripts/extract-changelog.py ${{ github.ref_name }}
+
   test:
     uses: ./.github/workflows/build-and-test.yml
 
   release:
-    needs: [test]
+    needs: [check-changelog, test]
     strategy:
       matrix:
         include:
@@ -24,6 +32,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
+
+    - name: Extract release notes
+      id: notes
+      run: |
+        python3 scripts/extract-changelog.py ${{ github.ref_name }} > release-notes.md
+        echo "notes_file=release-notes.md" >> $GITHUB_OUTPUT
 
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
@@ -52,4 +66,5 @@ jobs:
     - name: Upload to GitHub Release
       uses: softprops/action-gh-release@v2
       with:
+        body_path: ${{ steps.notes.outputs.notes_file }}
         files: ${{ steps.package.outputs.archive }}

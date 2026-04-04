@@ -1,0 +1,17 @@
+name: Release Check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check-changelog:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check CHANGELOG top section is not Unreleased
+        run: python3 scripts/check-changelog.py
+
+  test:
+    uses: ./.github/workflows/build-and-test.yml
