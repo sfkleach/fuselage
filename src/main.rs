@@ -13,7 +13,7 @@ mod procdir;
 #[command(name = "fuselage", version, about)]
 struct Args {
     /// Extract FILE into a fresh, mutable directory (may be repeated)
-    #[arg(long = "dynamic", value_name = "[NAME:]FILE")]
+    #[arg(short = 'd', long = "dynamic", value_name = "[NAME:]FILE")]
     dynamic: Vec<String>,
 
     /// Extract FILE into a cached, read-only directory (may be repeated)
