@@ -83,13 +83,25 @@ fn main() -> Result<()> {
 
     let tmpdir = pd.join("tmp");
 
+    // Process --dynamic archives: parse specs, check for duplicates, extract.
+    let dynamic_specs = parse_archive_specs(&args.dynamic)?;
+    if !dynamic_specs.is_empty() {
+        let dynamic_root = pd.join("dynamic");
+        for spec in &dynamic_specs {
+            let dest = dynamic_root.join(&spec.name);
+            std::fs::create_dir_all(&dest)
+                .with_context(|| format!("failed to create {}", dest.display()))?;
+            archive::extract_zip(&spec.file, &dest)?;
+        }
+        // Safety: single-threaded at this point.
+        unsafe { std::env::set_var("FUSELAGE_DYNAMIC", &dynamic_root) };
+    }
+
     if is_setuid {
-        // The tmpfs was mounted as root; chown its root and tmp/ to the real user
-        // so the command can write there without needing root.
-        nix::unistd::chown(&pd, Some(ruid), Some(rgid))
-            .context("chown: failed to transfer procdir to real user")?;
-        nix::unistd::chown(&tmpdir, Some(ruid), Some(rgid))
-            .context("chown: failed to transfer tmpdir to real user")?;
+        // All dirs and extracted files were created as root. Recursively chown
+        // the entire procdir to the real user so the child can access everything.
+        procdir::chown_recursive(&pd, ruid, rgid)
+            .context("failed to chown procdir to real user")?;
     }
 
     // Set FUSELAGE_TMPDIR so the child process can find its scratch space.
@@ -118,6 +130,24 @@ fn main() -> Result<()> {
     let drop_to = is_setuid.then_some((ruid, rgid));
 
     run_with_cleanup(&prog, &argv, &pd, drop_to)
+}
+
+/// Parse a list of `[NAME:]FILE` specs, returning an error on duplicate names.
+fn parse_archive_specs(raw: &[String]) -> Result<Vec<archive::ArchiveSpec>> {
+    let mut specs = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for arg in raw {
+        let spec = archive::ArchiveSpec::parse(arg)?;
+        if seen.contains(&spec.name) {
+            anyhow::bail!(
+                "duplicate archive name '{}'; use NAME: prefix to disambiguate",
+                spec.name
+            );
+        }
+        seen.push(spec.name.clone());
+        specs.push(spec);
+    }
+    Ok(specs)
 }
 
 /// Fork, exec `prog` with `argv` in the child, wait for it in the parent,

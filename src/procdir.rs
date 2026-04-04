@@ -89,6 +89,23 @@ pub fn setup_procdir_in_namespace(procdir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Recursively chown a directory tree to `uid`/`gid`.
+///
+/// Used in setuid mode to hand ownership of the tmpfs contents to the real user
+/// after all dirs and extracted archives have been created as root.
+pub fn chown_recursive(path: &Path, uid: nix::unistd::Uid, gid: nix::unistd::Gid) -> Result<()> {
+    nix::unistd::chown(path, Some(uid), Some(gid))
+        .with_context(|| format!("chown failed on {}", path.display()))?;
+    if path.is_dir() {
+        for entry in fs::read_dir(path)
+            .with_context(|| format!("failed to read {}", path.display()))?
+        {
+            chown_recursive(&entry?.path(), uid, gid)?;
+        }
+    }
+    Ok(())
+}
+
 /// Lazily unmount the tmpfs and remove the now-empty procdir.
 ///
 /// Errors are silently ignored since this is best-effort cleanup.
