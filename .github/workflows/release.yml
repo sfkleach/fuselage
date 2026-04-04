@@ -80,8 +80,6 @@ jobs:
         echo "archive=$ARCHIVE" >> $GITHUB_OUTPUT
 
     - name: Upload binary to GitHub Release
-      uses: softprops/action-gh-release@v2
-      with:
-        prerelease: ${{ contains(github.ref_name, '-rc') }}
-        draft: ${{ contains(github.ref_name, '-') && !contains(github.ref_name, '-rc') }}
-        files: ${{ steps.package.outputs.archive }}
+      run: gh release upload ${{ github.ref_name }} ${{ steps.package.outputs.archive }}
+      env:
+        GH_TOKEN: ${{ github.token }}
