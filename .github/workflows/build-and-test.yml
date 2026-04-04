@@ -66,7 +66,10 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
 
     - name: Build fuselage
-      run: cargo build --release
+      run: |
+        cargo build --release
+        chown root:root target/release/fuselage
+        chmod u+s target/release/fuselage
 
     - name: Test ephemeral tmpdir
       shell: bash
