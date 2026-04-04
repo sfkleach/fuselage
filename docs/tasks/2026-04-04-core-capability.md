@@ -49,4 +49,25 @@ zip archive in a read only folder in `$FUSELAGE_STATIC`.
 For this iteration we will not implement caching of the extracted folder. In 
 Step 5 we will look at different ways to improve the loading speed.
 
+## Step 5, Caching --static
+
+In this step we aim to reduce the amount of time spent unpacking the zip files
+when mounted as --static by unpacking into an cache indexed by the hash of the
+zip file itself. Subsequent runs can use the cache to skip the unpacking. This
+behaviour is gated by the `--cache-static` flag.
+
+### Suggested cache expiry mechanism
+
+This section suggests a mechanism based on last-access times. However if there
+are better mechanisms available, please suggest them.
+
+The cache will grow without limit, so caches that have not been used recently
+should be reaped. On exit, fuselage will spawn a process that reaps old caches
+that exceed a minimum size (the size should be pre-calculated). On start-up,
+before trying to load any cached folders, fuselage will "tag" all of the caches
+it wants to use as "in use" by updating the last-access time.
+
+While fuselage is running, it should periodically update the last-access time of
+any cache in use (which allows for many fuselage processes to be using the same
+cache). 
 
