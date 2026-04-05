@@ -11,7 +11,7 @@ No containers, no daemons, no manual cleanup.
 it, then execs the command. When the command exits the mounts vanish automatically.
 
 There is no isolation beyond the mount namespace — the process keeps its normal environment,
-PID space, network, and UID.
+PID space, and network.
 
 ## Usage
 
@@ -57,20 +57,59 @@ fuselage --dynamic=app:my-app.zip --run bin/server --port 8080
 
 ## Privilege model
 
-`fuselage` needs `CAP_SYS_ADMIN` to call `mount(2)`. By default it uses a user namespace
-(`unshare --user --mount --map-root-user`) so no installation or elevated privileges are
-required. The process sees itself as uid 0 inside the namespace, but files on real
-filesystems are owned by the real user.
+### setuid-root mode
 
-Running as root skips the user namespace entirely.
+`fuselage` is designed to run setuid-root. It needs `CAP_SYS_ADMIN` to create a
+mount namespace, and drops privileges back to the real user before execing the
+child — so the child process runs as the invoking user with no UID remapping.
+
+```bash
+sudo chown root:root /usr/local/bin/fuselage
+sudo chmod u+s /usr/local/bin/fuselage
+```
+
+### Unprivileged mode
+
+Not all users will be comfortable with the setuid-root requirement. For that
+reason, `fuselage` has a fall-back strategy that does not require setuid-root.
+In this case it falls back to a user namespace (`unshare --user --mount
+--map-root-user`), which works on most Linux distributions but will remap the
+process to uid 0 inside the namespace.
+
+This allows you to use `fuselage` in a wide variety of scenarios where the
+apparent user-id does not matter. However, tools like `sudo` will behave
+unexpectedly in this mode.
 
 ## Installation
 
+Install with the one-liner (installs setuid-root to `$HOME/.local/bin` by default):
+
 ```bash
-cargo install --path .
+curl -sSfL https://raw.githubusercontent.com/sfkleach/fuselage/main/install.sh | bash
 ```
 
-Or download a pre-built binary from the [releases page](../../releases).
+Or without setuid (UID remapping fallback):
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/sfkleach/fuselage/main/install.sh | FUSELAGE_SETUID=0 bash
+```
+
+Or download a pre-built binary directly from the [releases page](https://github.com/sfkleach/fuselage/releases)
+and install setuid-root as shown below.
+
+```bash
+# Download to (say) ~/.local/bin/fuselage for your architecture. This example
+# assumes 64-bit Intel and moves the binary to ~/.local/bin, which is typically
+# on your $PATH. IMPORTANT: replace the version number with the current release.
+wget https://github.com/sfkleach/fuselage/releases/download/v0.1.0/fuselage-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+tar zxf fuselage-v0.1.0-x86_64-unknown-linux-gnu.tar.gz fuselage
+mv -i fuselage ~/.local/bin
+rm -f fuselage-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+
+# setuid-root for normal setup (optional).
+sudo chown root:root ~/.local/bin/fuselage
+sudo chmod u+s ~/.local/bin/fuselage
+```
 
 ## Building from source
 
@@ -96,4 +135,4 @@ just test
 
 ## License
 
-MIT
+This project is licensed under the [MIT License](LICENSE).
