@@ -2,8 +2,15 @@
 name = "fuselage"
 version = "0.1.0"
 edition = "2024"
-description = "Ephemeral virtual filesystems for processes"
+description = "Linux CLI tool for running commands with ephemeral, namespace-private filesystems"
 license = "MIT"
+repository = "https://github.com/sfkleach/fuselage"
+homepage = "https://github.com/sfkleach/fuselage"
+documentation = "https://github.com/sfkleach/fuselage#readme"
+readme = "README.md"
+keywords = ["filesystem", "namespace", "mount", "linux", "sandbox"]
+categories = ["command-line-utilities", "filesystem"]
+rust-version = "1.85"
 
 [dependencies]
 # CLI argument parsing
