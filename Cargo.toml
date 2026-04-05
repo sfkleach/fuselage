@@ -1,6 +1,6 @@
 [package]
 name = "fuselage"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Linux CLI tool for running commands with ephemeral, namespace-private filesystems"
 license = "MIT"
@@ -11,6 +11,18 @@ readme = "README.md"
 keywords = ["filesystem", "namespace", "mount", "linux", "sandbox"]
 categories = ["command-line-utilities", "filesystem"]
 rust-version = "1.85"
+exclude = [
+  ".github/",
+  "CLAUDE.md",
+  "Justfile",
+  "docs/decisions/",
+  "docs/tasks/",
+  "docs/definition-of-done.md",
+  "docs/fuselage",
+  "scripts/",
+  "tests/",
+  "install.sh",
+]
 
 [dependencies]
 # CLI argument parsing
