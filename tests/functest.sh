@@ -282,6 +282,79 @@ check_fails "empty derived name rejected" \
 
 echo ""
 
+# ── Test group: base64 archives ──────────────────────────────────────────────
+
+echo "--- base64 archives ---"
+
+# Build a base64-encoded zip fixture: a single executable script.
+python3 - <<EOF
+import zipfile, base64
+z = zipfile.ZipFile("$WORKDIR/b64src.zip", "w")
+info = zipfile.ZipInfo("bin/hello.sh")
+info.external_attr = (0o755 << 16)
+z.writestr(info, '#!/bin/sh\necho "hello from base64"\n')
+z.close()
+with open("$WORKDIR/b64src.zip", "rb") as f:
+    data = base64.b64encode(f.read()).decode()
+with open("$WORKDIR/plain.b64", "w") as f:
+    f.write(data + "\n")
+EOF
+
+# Build the same fixture as a valid herescript shebang script.
+python3 - <<EOF
+import zipfile, base64, textwrap
+with open("$WORKDIR/b64src.zip", "rb") as f:
+    data = base64.b64encode(f.read()).decode()
+with open("$WORKDIR/commented.b64", "w") as f:
+    f.write("#!/usr/bin/herescript \$FUSELAGE\n")
+    f.write("#: --static b64src:\${HERESCRIPT_FILE}\n")
+    f.write("#: --run b64src/bin/hello.sh\n")
+    for chunk in textwrap.wrap(data, 76):
+        f.write(chunk + "\n")
+EOF
+
+# --dynamic accepts a plain base64-encoded zip.
+check_output "dynamic base64 zip content visible" "hello from base64" \
+    "$FUSELAGE" --dynamic="b64src:$WORKDIR/plain.b64" -- \
+        sh -c 'sh "$FUSELAGE_DYNAMIC/b64src/bin/hello.sh"'
+
+# --dynamic accepts a base64 zip with leading '#' comment lines.
+check_output "dynamic base64 zip with comments" "hello from base64" \
+    "$FUSELAGE" --dynamic="b64src:$WORKDIR/commented.b64" -- \
+        sh -c 'sh "$FUSELAGE_DYNAMIC/b64src/bin/hello.sh"'
+
+# --static accepts a plain base64-encoded zip.
+check_output "static base64 zip content visible" "hello from base64" \
+    "$FUSELAGE" --static="b64src:$WORKDIR/plain.b64" -- \
+        sh -c 'sh "$FUSELAGE_STATIC/b64src/bin/hello.sh"'
+
+# --run works with a base64 archive.
+check_output "--run with base64 archive" "hello from base64" \
+    "$FUSELAGE" --dynamic="b64src:$WORKDIR/plain.b64" --run b64src/bin/hello.sh
+
+# Build a base64-encoded squashfs fixture if mksquashfs is available.
+if command -v mksquashfs >/dev/null 2>&1; then
+    mkdir -p "$WORKDIR/sfsroot/bin"
+    printf '#!/bin/sh\necho "hello from b64 squashfs"\n' > "$WORKDIR/sfsroot/bin/hello.sh"
+    chmod +x "$WORKDIR/sfsroot/bin/hello.sh"
+    mksquashfs "$WORKDIR/sfsroot" "$WORKDIR/b64.sfs" -comp zstd -noappend -quiet
+    python3 - <<EOF
+import base64
+with open("$WORKDIR/b64.sfs", "rb") as f:
+    data = base64.b64encode(f.read()).decode()
+with open("$WORKDIR/squashfs.b64", "w") as f:
+    f.write("# squashfs image\n")
+    f.write(data + "\n")
+EOF
+    check_output "dynamic base64 squashfs content visible" "hello from b64 squashfs" \
+        "$FUSELAGE" --dynamic="sfs:$WORKDIR/squashfs.b64" -- \
+            sh -c 'sh "$FUSELAGE_DYNAMIC/sfs/bin/hello.sh"'
+else
+    echo "  SKIP: base64 squashfs (mksquashfs not installed)"
+fi
+
+echo ""
+
 # ── Setuid-specific tests ─────────────────────────────────────────────────────
 
 if [[ "$MODE" == "setuid" ]]; then

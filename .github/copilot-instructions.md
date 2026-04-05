@@ -4,7 +4,10 @@ Fuselage is a command-line tool for Linux that provides virtual, emphemeral
 private filesystem environments for sub-commands. The sub-commands are not
 sandboxed but they are provided with private sub-folders for the use by
 themselves and their child-processes. The private sub-folders are automatically
-cleaned up after the sub-command finishes. 
+cleaned up after the sub-command finishes.
+
+Its official repository is https://github.com/sfkleach/fuselage. The project is
+open-source under the MIT license.
 
 ## General Guidance
 
@@ -26,7 +29,7 @@ The goal is to build robust, well-designed software, not to avoid technical disa
 - EXCEPT in folders starting with an underscore, such as  `_build/`.
 - Design decisions should be documents in the `docs/decisions/` folder using
   the established template. However you do not need to precisely follow the template.
-- In some cases there were not multiple options considered so the pros-and-cons 
+- In some cases there were not multiple options considered so the pros-and-cons
   section may be omitted and we simply document the reasoning behind the decision.
 
 ## Programming Guidelines
@@ -56,9 +59,9 @@ For projects we own, including this one, we adopt the following single, uniform,
 - We use 120 as the maximum line-length and not 80 characters. The detailed guideline
   is that the length first-to-last non-whitespace character should be 80 characters
   and that an additional 40 characters of indentation is allowed.
-- Indentation in source files should use spaces only, no tabs EXCEPT in Golang or 
+- Indentation in source files should use spaces only, no tabs EXCEPT in Golang or
   Makefiles where tabs are effectively required.
-- Use 4 spaces per indentation level 
+- Use 4 spaces per indentation level
 - EXCEPT when working in YAML/JSON files where 2 spaces per indentation level is more practical owning to higher nesting levels.
 - EXCEPT when working with compilers/interpreters that require tabs for indentation, such as Golang and Makefiles. In those cases, use tabs for indentation.
 - UTF-8 encoding should be used for all text files EXCEPT when working with compilers/interpreters that do not support UTF-8.

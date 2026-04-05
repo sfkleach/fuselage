@@ -2,6 +2,17 @@
 
 Following the style in https://keepachangelog.com/en/1.0.0/
 
+## Unreleased
+
+### Added
+
+- Install pre-built binaries via `curl ... | bash` script. See [README.md](./README.md).
+- Base64 archive format: `--static` and `--dynamic` now accept files containing
+  a base64-encoded zip or squashfs image, with optional leading `#` comment lines.
+  The decoded archive is written into the private tmpfs and never touches persistent
+  storage. This enables self-contained executable scripts that embed their own
+  filesystem payload — see [docs/combining-with-herescript.md](docs/combining-with-herescript.md).
+
 ## v0.1.0, Initial release 2026-04-04
 
 ### Added

@@ -133,6 +133,10 @@ Or via [just](https://just.systems):
 just test
 ```
 
+## Further reading
+
+- [Combining fuselage with herescript](docs/combining-with-herescript.md) — embed a filesystem payload directly inside an executable script
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).

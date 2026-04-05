@@ -1,4 +1,4 @@
-# Task: Fuselage Core Capability
+# Task: Fuselage Core Capability [COMPLETE — released as v0.1.0]
 
 We will be implementing a command-line program `fuselage` that provides 
 private emphemal folders for a sub-command. 
