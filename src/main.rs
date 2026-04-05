@@ -97,9 +97,12 @@ fn main() -> Result<()> {
             let dest = dynamic_root.join(&spec.name);
             std::fs::create_dir_all(&dest)
                 .with_context(|| format!("failed to create {}", dest.display()))?;
-            match archive::detect_format(&spec.file)? {
-                archive::ArchiveFormat::Zip => archive::extract_zip(&spec.file, &dest)?,
-                archive::ArchiveFormat::Squashfs => archive::extract_squashfs(&spec.file, &dest)?,
+            let (archive_file, fmt) = resolve_archive(spec, &pd.join("decode"))?;
+            match fmt {
+                archive::ArchiveFormat::Zip => archive::extract_zip(&archive_file, &dest)?,
+                archive::ArchiveFormat::Squashfs => {
+                    archive::extract_squashfs(&archive_file, &dest)?
+                }
             }
         }
         // Safety: single-threaded at this point.
@@ -130,27 +133,28 @@ fn main() -> Result<()> {
             std::fs::create_dir_all(&dest)
                 .with_context(|| format!("failed to create {}", dest.display()))?;
 
-            let action = match archive::detect_format(&spec.file)? {
+            let (archive_file, fmt) = resolve_archive(spec, &pd.join("decode"))?;
+            let action = match fmt {
                 // ── .sfs input ───────────────────────────────────────────────
                 // Use directly — no caching needed, the file is already optimal.
                 archive::ArchiveFormat::Squashfs => {
                     if is_privileged {
-                        MountAction::LoopSfs(spec.file.clone())
+                        MountAction::LoopSfs(archive_file)
                     } else {
-                        MountAction::ExtractSfsBindRo(spec.file.clone())
+                        MountAction::ExtractSfsBindRo(archive_file)
                     }
                 }
 
                 // ── zip input, no caching ────────────────────────────────────
                 archive::ArchiveFormat::Zip if !args.cache_static => {
-                    archive::extract_zip(&spec.file, &dest)?;
+                    archive::extract_zip(&archive_file, &dest)?;
                     MountAction::BindRoSelf
                 }
 
                 // ── zip input, caching enabled ───────────────────────────────
                 archive::ArchiveFormat::Zip => {
                     std::fs::create_dir_all(&cache_dir)?;
-                    let hash = archive::compute_sha256(&spec.file)?;
+                    let hash = archive::compute_sha256(&archive_file)?;
                     let sfs_path = cache_dir.join(format!("{hash}.sfs"));
                     let dir_path = cache_dir.join(&hash);
                     let sentinel = cache_dir.join(format!("{hash}.complete"));
@@ -160,11 +164,11 @@ fn main() -> Result<()> {
                         let tmp = pd.join(format!(".tmp-{}", spec.name));
                         std::fs::create_dir_all(&tmp)?;
 
-                        let built_sfs = archive::zip_to_squashfs(&spec.file, &sfs_path, &tmp)?;
+                        let built_sfs = archive::zip_to_squashfs(&archive_file, &sfs_path, &tmp)?;
 
                         if !built_sfs {
                             // mksquashfs not available — fall back to directory cache.
-                            archive::extract_zip(&spec.file, &dir_path)?;
+                            archive::extract_zip(&archive_file, &dir_path)?;
                         }
 
                         std::fs::remove_dir_all(&tmp).ok();
@@ -254,6 +258,44 @@ fn main() -> Result<()> {
     let drop_to = is_setuid.then_some((ruid, rgid));
 
     run_with_cleanup(&prog, &argv, &pd, drop_to, &cache_dir)
+}
+
+/// Resolve an archive spec to a `(file_path, format)` pair.
+///
+/// Tries direct format detection first. If the file is neither zip nor squashfs,
+/// attempts to decode it as a base64-encoded archive (with optional leading `#`
+/// comment lines) into `decode_dir`. The decoded file is written to
+/// `decode_dir/<name>.decoded` within the private tmpfs so it never touches
+/// persistent storage.
+fn resolve_archive(
+    spec: &archive::ArchiveSpec,
+    decode_dir: &Path,
+) -> Result<(std::path::PathBuf, archive::ArchiveFormat)> {
+    if let Ok(fmt) = archive::detect_format(&spec.file) {
+        return Ok((spec.file.clone(), fmt));
+    }
+
+    // Unrecognised binary format — try base64 with optional '#' comment lines.
+    std::fs::create_dir_all(decode_dir)
+        .with_context(|| format!("failed to create decode dir {}", decode_dir.display()))?;
+    let decoded = decode_dir.join(format!("{}.decoded", spec.name));
+    let is_b64 = archive::try_decode_base64(&spec.file, &decoded)?;
+
+    if !is_b64 {
+        anyhow::bail!(
+            "{}: unrecognised archive format (not zip, squashfs, or base64)",
+            spec.file.display()
+        );
+    }
+
+    let fmt = archive::detect_format(&decoded).with_context(|| {
+        format!(
+            "{}: base64 decoded to an unrecognised archive format",
+            spec.file.display()
+        )
+    })?;
+
+    Ok((decoded, fmt))
 }
 
 /// Parse a list of `[NAME:]FILE` specs, accumulating names into `seen`.

@@ -112,6 +112,54 @@ fn stem(path: &str) -> String {
     base.to_string()
 }
 
+/// Attempt to decode a base64-encoded archive (with optional leading `#` comment
+/// lines) from `src` and write the decoded bytes to `dest`.
+///
+/// Returns `true` if the content looked like base64 and was successfully decoded,
+/// `false` if the content clearly was not base64 (allowing the caller to produce a
+/// better error message). Returns an error if the content appeared to be base64 but
+/// decoding failed.
+pub fn try_decode_base64(src: &Path, dest: &Path) -> Result<bool> {
+    use base64::Engine;
+    use std::io::{BufRead, BufReader};
+
+    let f = fs::File::open(src).with_context(|| format!("failed to open {}", src.display()))?;
+    let reader = BufReader::new(f);
+
+    let mut b64 = String::new();
+    for line in reader.lines() {
+        let line = line.with_context(|| format!("failed to read {}", src.display()))?;
+        if line.starts_with('#') {
+            // Skip comment lines — these carry herescript directives, not data.
+            continue;
+        }
+        // Append without the newline; base64 data is often split across lines.
+        b64.push_str(line.trim_end());
+    }
+
+    if b64.is_empty() {
+        return Ok(false);
+    }
+
+    // Quick sanity check: all characters must be in the standard base64 alphabet.
+    // Any other character indicates this is not a base64 file.
+    if !b64
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '='))
+    {
+        return Ok(false);
+    }
+
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(&b64)
+        .with_context(|| format!("base64 decode failed for {}", src.display()))?;
+
+    fs::write(dest, &decoded)
+        .with_context(|| format!("failed to write decoded archive to {}", dest.display()))?;
+
+    Ok(true)
+}
+
 /// Detect the archive format by reading the first 4 magic bytes.
 pub fn detect_format(path: &Path) -> Result<ArchiveFormat> {
     let mut f =
@@ -380,6 +428,56 @@ mod tests {
     #[test]
     fn compute_sha256_nonexistent() {
         assert!(compute_sha256(std::path::Path::new("/nonexistent")).is_err());
+    }
+
+    // ── try_decode_base64() ───────────────────────────────────────────────────
+
+    #[test]
+    fn decode_base64_pure_content() {
+        // "hello" base64-encoded is "aGVsbG8="
+        let src = write_tmp(b"aGVsbG8=");
+        let dest = tempfile::NamedTempFile::new().unwrap();
+        let ok = try_decode_base64(src.path(), dest.path()).unwrap();
+        assert!(ok);
+        assert_eq!(fs::read(dest.path()).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn decode_base64_with_hash_comments() {
+        // Comment lines preceding base64 data must be stripped.
+        let src = write_tmp(b"# This is a comment\n## Another comment\naGVsbG8=\n");
+        let dest = tempfile::NamedTempFile::new().unwrap();
+        let ok = try_decode_base64(src.path(), dest.path()).unwrap();
+        assert!(ok);
+        assert_eq!(fs::read(dest.path()).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn decode_base64_multiline_data() {
+        // Base64 data split across multiple lines must be reassembled.
+        let src = write_tmp(b"# comment\naGVs\nbG8=\n");
+        let dest = tempfile::NamedTempFile::new().unwrap();
+        let ok = try_decode_base64(src.path(), dest.path()).unwrap();
+        assert!(ok);
+        assert_eq!(fs::read(dest.path()).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn decode_base64_binary_content_is_not_base64() {
+        // A file with binary magic bytes should be rejected without error.
+        let src = write_tmp(b"PK\x03\x04");
+        let dest = tempfile::NamedTempFile::new().unwrap();
+        let ok = try_decode_base64(src.path(), dest.path()).unwrap();
+        assert!(!ok);
+    }
+
+    #[test]
+    fn decode_base64_only_comments_is_not_base64() {
+        // A file with only comment lines has no data to decode.
+        let src = write_tmp(b"# no data here\n# nothing\n");
+        let dest = tempfile::NamedTempFile::new().unwrap();
+        let ok = try_decode_base64(src.path(), dest.path()).unwrap();
+        assert!(!ok);
     }
 
     // ── validate_name() ───────────────────────────────────────────────────────
