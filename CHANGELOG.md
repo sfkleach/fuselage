@@ -7,6 +7,7 @@ Following the style in https://keepachangelog.com/en/1.0.0/
 ### Added
 
 - Install pre-built binaries via `curl ... | bash` script. See [README.md](./README.md).
+- Published to [crates.io](https://crates.io/crates/fuselage): `cargo install fuselage`.
 - Base64 archive format: `--static` and `--dynamic` now accept files containing
   a base64-encoded zip or squashfs image, with optional leading `#` comment lines.
   The decoded archive is written into the private tmpfs and never touches persistent
