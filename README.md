@@ -94,6 +94,12 @@ Or without setuid (UID remapping fallback):
 curl -sSfL https://raw.githubusercontent.com/sfkleach/fuselage/main/install.sh | FUSELAGE_SETUID=0 bash
 ```
 
+Or via `cargo install` (requires Rust toolchain):
+
+```bash
+cargo install fuselage
+```
+
 Or download a pre-built binary directly from the [releases page](https://github.com/sfkleach/fuselage/releases)
 and install setuid-root as shown below.
 
