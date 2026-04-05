@@ -2,7 +2,7 @@
 
 Following the style in https://keepachangelog.com/en/1.0.0/
 
-## Unreleased
+## v0.1.0, Base64 Encoded Archive 2026-04-05
 
 ### Added
 
