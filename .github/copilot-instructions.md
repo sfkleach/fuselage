@@ -6,7 +6,7 @@ sandboxed but they are provided with private sub-folders for the use by
 themselves and their child-processes. The private sub-folders are automatically
 cleaned up after the sub-command finishes.
 
-It's official repository is https://github.com/sfkleach/fuselage. The project is
+Its official repository is https://github.com/sfkleach/fuselage. The project is
 open-source under the MIT license.
 
 ## General Guidance
