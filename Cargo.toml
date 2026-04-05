@@ -11,6 +11,15 @@ readme = "README.md"
 keywords = ["filesystem", "namespace", "mount", "linux", "sandbox"]
 categories = ["command-line-utilities", "filesystem"]
 rust-version = "1.85"
+exclude = [
+  ".github/",
+  "CLAUDE.md",
+  "Justfile",
+  "docs/",
+  "scripts/",
+  "tests/",
+  "install.sh",
+]
 
 [dependencies]
 # CLI argument parsing
