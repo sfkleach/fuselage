@@ -98,6 +98,9 @@ Or via `cargo install` (requires Rust toolchain):
 
 ```bash
 cargo install fuselage
+# And make it setuid-root (optional)
+sudo chown root:root ~/.cargo/bin/fuselage
+sudo chmod u+s ~/.cargo/bin/fuselage
 ```
 
 Or download a pre-built binary directly from the [releases page](https://github.com/sfkleach/fuselage/releases)

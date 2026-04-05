@@ -1,6 +1,6 @@
 [package]
 name = "fuselage"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Linux CLI tool for running commands with ephemeral, namespace-private filesystems"
 license = "MIT"
@@ -15,7 +15,10 @@ exclude = [
   ".github/",
   "CLAUDE.md",
   "Justfile",
-  "docs/",
+  "docs/decisions/",
+  "docs/tasks/",
+  "docs/definition-of-done.md",
+  "docs/fuselage",
   "scripts/",
   "tests/",
   "install.sh",
