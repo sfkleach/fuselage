@@ -5,6 +5,7 @@ use std::ffi::CString;
 use std::path::Path;
 
 mod archive;
+mod b64stream;
 mod namespace;
 mod procdir;
 
