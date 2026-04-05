@@ -120,78 +120,72 @@ fn stem(path: &str) -> String {
 /// better error message). Returns an error if the content appeared to be base64 but
 /// decoding failed.
 pub fn try_decode_base64(src: &Path, dest: &Path) -> Result<bool> {
-    use base64::Engine;
-    use std::io::{BufRead, BufReader, Write};
-
-    // Buffer this many base64 characters before decoding and flushing to disk.
-    // Must be a multiple of 4 so each chunk aligns on a base64 block boundary.
-    // 3072 base64 chars → 2304 decoded bytes per flush.
-    const B64_CHUNK: usize = 4 * 768;
+    use std::io::{BufRead, BufReader};
 
     let f = fs::File::open(src).with_context(|| format!("failed to open {}", src.display()))?;
     let reader = BufReader::new(f);
 
-    let mut b64_buf = String::with_capacity(B64_CHUNK + 256);
-    let mut out: Option<fs::File> = None;
+    // Write to a temporary file alongside dest so that a partial decode never
+    // leaves a corrupt file at the destination path.
+    let tmp_dest = dest.with_extension("tmp");
+    let mut dec: Option<crate::b64stream::B64Decoder<fs::File>> = None;
 
-    for line in reader.lines() {
-        let line = line.with_context(|| format!("failed to read {}", src.display()))?;
-        if line.starts_with('#') {
-            // Skip comment lines — these carry herescript directives, not data.
-            continue;
-        }
-        let trimmed = line.trim_end();
-        if trimmed.is_empty() {
-            continue;
-        }
+    let result = (|| {
+        for line in reader.lines() {
+            let line = line.with_context(|| format!("failed to read {}", src.display()))?;
+            if line.starts_with('#') {
+                // Skip comment lines — these carry herescript directives, not data.
+                continue;
+            }
+            let trimmed = line.trim_end();
+            if trimmed.is_empty() {
+                continue;
+            }
 
-        // On the first data line, validate the base64 alphabet as a quick
-        // heuristic to distinguish base64 files from other text formats.
-        if out.is_none() {
-            if !trimmed
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '='))
-            {
+            // Open the destination file lazily so nothing is created for non-base64 inputs.
+            if dec.is_none() {
+                let out = fs::File::create(&tmp_dest)
+                    .with_context(|| format!("failed to create {}", tmp_dest.display()))?;
+                dec = Some(crate::b64stream::B64Decoder::new(out));
+            }
+
+            let accepted = dec
+                .as_mut()
+                .unwrap()
+                .push_line(trimmed)
+                .with_context(|| format!("base64 decode failed for {}", src.display()))?;
+
+            if !accepted {
                 return Ok(false);
             }
-            // Open the destination file lazily so nothing is created for non-base64 inputs.
-            out = Some(
-                fs::File::create(dest)
-                    .with_context(|| format!("failed to create {}", dest.display()))?,
-            );
         }
 
-        b64_buf.push_str(trimmed);
+        let Some(dec) = dec else {
+            // No data lines were found.
+            return Ok(false);
+        };
 
-        // Decode and flush whenever the buffer reaches a full chunk boundary.
-        if b64_buf.len() >= B64_CHUNK {
-            let chunk = &b64_buf[..B64_CHUNK];
-            let decoded = base64::engine::general_purpose::STANDARD
-                .decode(chunk)
-                .with_context(|| format!("base64 decode failed for {}", src.display()))?;
-            out.as_mut()
-                .unwrap()
-                .write_all(&decoded)
-                .with_context(|| format!("failed to write to {}", dest.display()))?;
-            b64_buf.drain(..B64_CHUNK);
-        }
-    }
-
-    let Some(mut out) = out else {
-        // No data lines were found.
-        return Ok(false);
-    };
-
-    // Decode and flush the final (possibly padded) chunk.
-    if !b64_buf.is_empty() {
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(&b64_buf)
+        dec.finish()
             .with_context(|| format!("base64 decode failed for {}", src.display()))?;
-        out.write_all(&decoded)
-            .with_context(|| format!("failed to write to {}", dest.display()))?;
+
+        // Atomically move the completed file into place.
+        fs::rename(&tmp_dest, dest).with_context(|| {
+            format!(
+                "failed to rename {} to {}",
+                tmp_dest.display(),
+                dest.display()
+            )
+        })?;
+
+        Ok(true)
+    })();
+
+    // Clean up the temporary file on any error path after it was created.
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_dest);
     }
 
-    Ok(true)
+    result
 }
 
 /// Detect the archive format by reading the first 4 magic bytes.
