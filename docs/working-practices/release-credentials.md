@@ -3,27 +3,16 @@
 This document covers the one-time setup required on each workstation before
 running `just draft-release` or `just publish-release`.
 
-## crates.io token
+## crates.io (trusted publisher — no token required)
 
-`cargo publish` reads the token from `~/.cargo/credentials.toml`. Run once
-per machine:
+`cargo publish` runs in GitHub Actions via the trusted publisher mechanism.
+No crates.io API token is needed on the local machine or in GitHub secrets.
 
-```bash
-cargo login
-```
-
-Paste the token when prompted. It is stored in `~/.cargo/credentials.toml`
-and all subsequent `cargo publish` calls use it silently.
-
-To obtain or regenerate the token:
+One-time setup on crates.io (per crate, not per machine):
 1. Log in at [crates.io](https://crates.io).
-2. Go to **Account Settings → API Tokens → New Token**.
-3. Scopes: `publish-new` and `publish-update`.
-4. Copy the token — it is shown only once.
-
-The token must NOT be added to GitHub Actions secrets. See
-[docs/decisions/0002-designing-installsh](../decisions/0002-designing-installsh/0002-designing-installsh.md)
-for why `cargo publish` runs locally rather than from CI.
+2. Go to the `fuselage` crate → **Settings → Trusted Publishing**.
+3. Add a trusted publisher: repository `sfkleach/fuselage`, workflow
+   `release-publish.yml`.
 
 ## SSH signing key
 

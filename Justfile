@@ -102,9 +102,9 @@ install:
     cargo install --path .
 
 
-# Sign and push a release tag, triggering the GitHub Actions release workflow.
-# Monitor the workflow run manually via: gh run list --workflow=release.yml
-# Run just publish-release once CI has completed successfully.
+# Sign and push a release tag, triggering the release-draft.yml workflow.
+# Monitor the workflow run manually via: gh run list --workflow=release-draft.yml
+# Run just publish-release once CI has completed and the draft release looks correct.
 # Usage: just draft-release v0.2.0
 draft-release VERSION:
     #!/usr/bin/env bash
@@ -120,29 +120,24 @@ draft-release VERSION:
     echo "Tag pushed. Monitor CI at: https://github.com/sfkleach/fuselage/actions"
     echo "Run 'just publish-release {{VERSION}}' once the workflow completes successfully."
 
-# Publish a release: push to crates.io (stable only) and publish the GitHub release.
-# Run this after draft-release and once CI has completed successfully.
+# Publish a release: triggers the release-publish.yml workflow on GitHub Actions,
+# which runs cargo publish via trusted publisher and flips the draft to published.
+# Only stable tags (vX.Y.Z with no suffix) are accepted.
+# Run this after draft-release and once the draft release looks correct.
 # Usage: just publish-release v0.2.0
 publish-release VERSION:
     #!/usr/bin/env bash
     set -euo pipefail
-    # Only publish to crates.io for stable releases (no - suffix).
-    # Pre-release (-rc) and draft (-) tags are not published to crates.io.
-    if [[ "{{VERSION}}" != *"-"* ]]; then
-        echo "Publishing to crates.io..."
-        cargo publish --allow-dirty
-    else
-        echo "Skipping crates.io publish for non-stable tag {{VERSION}}."
+    # Only stable tags are published — the workflow enforces this too, but fail fast locally.
+    if [[ "{{VERSION}}" == *"-"* ]]; then
+        echo "error: '{{VERSION}}' is not a stable tag — only vX.Y.Z tags can be published." >&2
+        exit 1
     fi
-    # Flip the GitHub release to published (or pre-release for -rc tags).
-    if [[ "{{VERSION}}" == *"-rc"* ]]; then
-        gh release edit "{{VERSION}}" --repo sfkleach/fuselage --draft=false --prerelease
-    elif [[ "{{VERSION}}" == *"-"* ]]; then
-        echo "NOTE: {{VERSION}} is a draft tag — not flipping to published."
-    else
-        gh release edit "{{VERSION}}" --repo sfkleach/fuselage --draft=false
-    fi
-    echo "Released {{VERSION}}."
+    echo "Triggering release-publish workflow for {{VERSION}}..."
+    gh workflow run release-publish.yml \
+        --repo sfkleach/fuselage \
+        --field tag="{{VERSION}}"
+    echo "Workflow triggered. Monitor at: https://github.com/sfkleach/fuselage/actions"
 
 # Initialize decision records
 init-decisions:

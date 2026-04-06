@@ -28,3 +28,10 @@ not worth the friction.
 - Revise the Justfile so that the two phase publication is retained.
 - Update working-practices documents so that they are in line with the 
   new process.
+
+## Step 4: Prep for new release
+
+- Update the version number to `0.2.5` in Cargo.toml and 
+- Add a new CHANGELOG.md section `v0.2.5` 
+- Build and verify that that we are `just shippable`
+
