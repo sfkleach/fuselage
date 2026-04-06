@@ -5,7 +5,8 @@ Usage: check-changelog.py
 
 Exits with a non-zero status if:
 - The first ## section heading contains the word 'unreleased', or
-- The version in the first ## heading does not match the version in Cargo.toml.
+- The version in the first ## heading does not match the version in Cargo.toml, or
+- The version in Cargo.lock does not match the version in Cargo.toml.
 """
 import re
 import sys
@@ -18,6 +19,19 @@ def cargo_version() -> str:
             if m:
                 return m.group(1)
     print("FAIL: Could not find version in Cargo.toml.")
+    sys.exit(1)
+
+
+def lock_version() -> str:
+    """Return the version of the top-level package recorded in Cargo.lock."""
+    with open("Cargo.lock") as f:
+        content = f.read()
+    # Cargo.lock lists the workspace packages first; find the [[package]] block
+    # for 'fuselage' and extract its version.
+    m = re.search(r'\[\[package\]\]\s+name\s*=\s*"fuselage"\s+version\s*=\s*"([^"]+)"', content)
+    if m:
+        return m.group(1)
+    print("FAIL: Could not find fuselage package entry in Cargo.lock.")
     sys.exit(1)
 
 
@@ -69,7 +83,15 @@ def main() -> None:
         )
         sys.exit(1)
 
-    print(f"OK: Top CHANGELOG section is '{heading}' (matches Cargo.toml v{version}).")
+    locked = lock_version()
+    if locked != version:
+        print(
+            f"FAIL: Cargo.lock version '{locked}' does not match "
+            f"Cargo.toml version '{version}' — run 'cargo build' and commit Cargo.lock."
+        )
+        sys.exit(1)
+
+    print(f"OK: Top CHANGELOG section is '{heading}' (matches Cargo.toml v{version}, Cargo.lock v{locked}).")
     sys.exit(0)
 
 
