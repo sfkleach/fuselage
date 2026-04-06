@@ -51,6 +51,11 @@ filetime = "0.2"
 # Temporary files and directories for unit tests.
 tempfile = "3"
 
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }.tar.gz"
+bin-dir = "{ name }{ binary-ext }"
+pkg-fmt = "tgz"
+
 [profile.release]
 strip = true        # strip symbols (already happening, but makes it explicit)
 opt-level = "z"     # optimise for size instead of speed

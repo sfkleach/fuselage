@@ -82,7 +82,24 @@ unexpectedly in this mode.
 
 ## Installation
 
-Install with the one-liner (installs setuid-root to `$HOME/.local/bin` by default):
+Several installation methods are available. None requires `root` to install,
+but setting the setuid bit (for the recommended operating mode) always does.
+
+### `cargo install` (builds from source)
+
+Requires the Rust toolchain — install via [rustup.rs](https://rustup.rs) if needed.
+
+```bash
+cargo install fuselage
+# And make it setuid-root (optional).
+sudo chown root:root ~/.cargo/bin/fuselage
+sudo chmod u+s ~/.cargo/bin/fuselage
+```
+
+### `curl | bash`
+
+A convenience one-liner for casual use (installs to `$HOME/.local/bin` setuid-root
+by default). See [install.sh security notice](install.sh) before using.
 
 ```bash
 curl -sSfL https://raw.githubusercontent.com/sfkleach/fuselage/main/install.sh | bash
@@ -94,26 +111,33 @@ Or without setuid (UID remapping fallback):
 curl -sSfL https://raw.githubusercontent.com/sfkleach/fuselage/main/install.sh | FUSELAGE_SETUID=0 bash
 ```
 
-Or via `cargo install` (requires Rust toolchain):
+### Pre-built binary via `cargo binstall`
+
+Requires [cargo-binstall](https://github.com/cargo-bins/cargo-binstall). Downloads
+a pre-built binary from the GitHub release and verifies its SHA256 checksum before
+installing. Falls back to compiling from source if no pre-built binary is available
+for your target.
 
 ```bash
-cargo install fuselage
-# And make it setuid-root (optional)
+cargo binstall fuselage
+# And make it setuid-root (optional).
 sudo chown root:root ~/.cargo/bin/fuselage
 sudo chmod u+s ~/.cargo/bin/fuselage
 ```
 
-Or download a pre-built binary directly from the [releases page](https://github.com/sfkleach/fuselage/releases)
+### Manual download
+
+Download a pre-built binary directly from the [releases page](https://github.com/sfkleach/fuselage/releases)
 and install setuid-root as shown below.
 
 ```bash
 # Download to (say) ~/.local/bin/fuselage for your architecture. This example
 # assumes 64-bit Intel and moves the binary to ~/.local/bin, which is typically
 # on your $PATH. IMPORTANT: replace the version number with the current release.
-wget https://github.com/sfkleach/fuselage/releases/download/v0.1.0/fuselage-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
-tar zxf fuselage-v0.1.0-x86_64-unknown-linux-gnu.tar.gz fuselage
+wget https://github.com/sfkleach/fuselage/releases/download/v0.2.0/fuselage-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
+tar zxf fuselage-v0.2.0-x86_64-unknown-linux-gnu.tar.gz fuselage
 mv -i fuselage ~/.local/bin
-rm -f fuselage-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+rm -f fuselage-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
 
 # setuid-root for normal setup (optional).
 sudo chown root:root ~/.local/bin/fuselage
