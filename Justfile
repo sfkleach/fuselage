@@ -1,6 +1,9 @@
 default:
     @just --list
 
+shippable:
+    python3 scripts/check-changelog.py
+
 test: unittest lint fmt-check audit functest
 
 unittest:
@@ -98,6 +101,43 @@ setuid-release:
 install:
     cargo install --path .
 
+
+# Sign and push a release tag, triggering the GitHub Actions release workflow.
+# Monitor the workflow run manually via: gh run list --workflow=release.yml
+# Run just publish-release once CI has completed successfully.
+# Usage: just draft-release v0.2.0
+draft-release VERSION:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Signing and pushing tag {{VERSION}}..."
+    git tag -s "{{VERSION}}" -m "Release {{VERSION}}"
+    git push origin "{{VERSION}}"
+    echo "Tag pushed. Monitor CI at: https://github.com/sfkleach/fuselage/actions"
+    echo "Run 'just publish-release {{VERSION}}' once the workflow completes successfully."
+
+# Publish a release: push to crates.io (stable only) and publish the GitHub release.
+# Run this after draft-release and once CI has completed successfully.
+# Usage: just publish-release v0.2.0
+publish-release VERSION:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Only publish to crates.io for stable releases (no - suffix).
+    # Pre-release (-rc) and draft (-) tags are not published to crates.io.
+    if [[ "{{VERSION}}" != *"-"* ]]; then
+        echo "Publishing to crates.io..."
+        cargo publish
+    else
+        echo "Skipping crates.io publish for non-stable tag {{VERSION}}."
+    fi
+    # Flip the GitHub release to published (or pre-release for -rc tags).
+    if [[ "{{VERSION}}" == *"-rc"* ]]; then
+        gh release edit "{{VERSION}}" --repo sfkleach/fuselage --draft=false --prerelease
+    elif [[ "{{VERSION}}" == *"-"* ]]; then
+        echo "NOTE: {{VERSION}} is a draft tag — not flipping to published."
+    else
+        gh release edit "{{VERSION}}" --repo sfkleach/fuselage --draft=false
+    fi
+    echo "Released {{VERSION}}."
 
 # Initialize decision records
 init-decisions:
