@@ -109,6 +109,11 @@ install:
 draft-release VERSION:
     #!/usr/bin/env bash
     set -euo pipefail
+    # Refuse to tag a dirty working tree — uncommitted changes would not be part of the release.
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "error: working tree has uncommitted changes; commit or stash them before tagging." >&2
+        exit 1
+    fi
     echo "Signing and pushing tag {{VERSION}}..."
     git tag -s "{{VERSION}}" -m "Release {{VERSION}}"
     git push origin "{{VERSION}}"
@@ -125,7 +130,7 @@ publish-release VERSION:
     # Pre-release (-rc) and draft (-) tags are not published to crates.io.
     if [[ "{{VERSION}}" != *"-"* ]]; then
         echo "Publishing to crates.io..."
-        cargo publish
+        cargo publish --allow-dirty
     else
         echo "Skipping crates.io publish for non-stable tag {{VERSION}}."
     fi

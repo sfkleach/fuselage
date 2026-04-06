@@ -40,7 +40,7 @@ with a note that `cargo install` does not set the setuid bit.
 ### Step 4 — Release pre-check
 
 Before each release, verify shippable state per
-[docs/process/definition-of-shippable.md](../process/definition-of-shippable.md):
+[docs/working-practices/definition-of-shippable.md](../working-practices/definition-of-shippable.md):
 
 - [ ] `just test` passes cleanly.
 - [ ] `just shippable` passes (CHANGELOG version matches Cargo.toml, no duplicates).

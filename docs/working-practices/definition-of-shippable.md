@@ -1,19 +1,19 @@
 # Definition of Shippable
 
 This document defines what must be true before a release tag is pushed.
-It complements the [Definition of Done](../working-practices/definition-of-done.md),
+It complements the [Definition of Done](definition-of-done.md),
 which governs individual tasks. Shippable is the release-level gate.
 
-## Automated checks
+## Version bump
 
-Run `just test` and confirm it passes cleanly:
-
-```bash
-just test
-```
-
-This covers unit tests, functional tests, formatting, clippy, build, and
-security audit. No failures, no warnings promoted to errors.
+- [ ] `Cargo.toml` version is bumped appropriately (semver):
+  - Patch (`x.y.Z`) — bug fixes only, no new features, no breaking changes.
+  - Minor (`x.Y.0`) — new features, backwards compatible.
+  - Major (`X.0.0`) — breaking changes.
+- [ ] Run `cargo build` (or `cargo test`) so that `Cargo.lock` is regenerated
+  to match the new version.
+- [ ] Commit both `Cargo.toml` and `Cargo.lock` together.
+- [ ] `Cargo.toml` version matches the intended tag (e.g. `v0.2.1`).
 
 ## CHANGELOG
 
@@ -28,14 +28,16 @@ Verify with:
 just shippable
 ```
 
-## Version numbers
+## Automated checks
 
-- [ ] `Cargo.toml` version is bumped appropriately (semver):
-  - Patch (`x.y.Z`) — bug fixes only, no new features, no breaking changes.
-  - Minor (`x.Y.0`) — new features, backwards compatible.
-  - Major (`X.0.0`) — breaking changes.
-- [ ] `Cargo.toml` version matches the CHANGELOG heading.
-- [ ] `Cargo.toml` version matches the intended tag (e.g. `v0.2.0`).
+Run `just test` and confirm it passes cleanly:
+
+```bash
+just test
+```
+
+This covers unit tests, functional tests, formatting, clippy, build, and
+security audit. No failures, no warnings promoted to errors.
 
 ## Documentation
 
@@ -47,7 +49,7 @@ just shippable
 
 - [ ] Run the `release-check` workflow manually on GitHub and confirm it passes:
   **Actions → Release Check → Run workflow**.
-- [ ] Push a draft tag (e.g. `v0.2.0-draft.1`) and confirm the release workflow
+- [ ] Push a draft tag (e.g. `vX.Y.Z-draft.1`) and confirm the release workflow
   builds successfully and produces the expected assets.
 - [ ] Confirm the draft release on GitHub looks correct: title, release notes,
   binaries, checksum files.
@@ -60,12 +62,10 @@ just shippable
 
 ## Tagging and publishing
 
-Once all checks above pass:
+Confirm the working tree is clean (`git status`) — `just draft-release` will
+refuse to tag a dirty tree.
 
 ```bash
 just draft-release vX.Y.Z   # sign and push tag, then monitor CI manually
 just publish-release vX.Y.Z # cargo publish (stable only) + flip to published
 ```
-
-See the [cargo-install task](../tasks/2026-04-05-cargo-install-fuselage.md)
-for full details of the two-phase release process.
