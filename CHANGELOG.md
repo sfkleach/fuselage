@@ -2,6 +2,12 @@
 
 Following the style in https://keepachangelog.com/en/1.0.0/
 
+## v0.2.1, cargo binstall
+
+### Added
+
+- Installation via `cargo binstall fuselage` supported.
+
 ## v0.2.0, Base64 Encoded Archive 2026-04-05
 
 ### Added
