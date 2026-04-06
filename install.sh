@@ -15,6 +15,19 @@
 
 set -euo pipefail
 
+# SECURITY NOTICE: This script is a convenience installer intended for casual
+# use only. It downloads a pre-built binary over HTTPS, which protects against
+# accidental corruption and basic MITM attacks, but provides no protection
+# against a compromised GitHub account or release pipeline.
+#
+# For security-sensitive installations, use:
+#   cargo install fuselage
+#
+# crates.io is an independent trust domain and the release is actioned from
+# the developer's local machine rather than solely from GitHub Actions.
+echo "NOTE: This installer is for casual use only. For secure installation use: cargo install fuselage"
+echo ""
+
 REPO="sfkleach/fuselage"
 INSTALL_DIR="${FUSELAGE_INSTALL:-$HOME/.local/bin}"
 SETUID="${FUSELAGE_SETUID:-1}"
@@ -61,6 +74,18 @@ mkdir -p "$TMPDIR"
 trap "rm -rf /tmp/fuselage-install-$$" EXIT
 
 curl -sSfL "$URL" -o "${TMPDIR}/${ARCHIVE}"
+
+# Verify the download against the SHA256 checksum published in the release.
+# This guards against accidental corruption and basic MITM attacks. It does
+# not protect against a compromised GitHub account — see the security notice above.
+CHECKSUM_URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARCHIVE}.sha256"
+curl -sSfL "$CHECKSUM_URL" -o "${TMPDIR}/${ARCHIVE}.sha256"
+# sha256sum expects "HASH  FILENAME" with the filename relative to the working directory.
+( cd "$TMPDIR" && sha256sum --check "${ARCHIVE}.sha256" ) || {
+    echo "ERROR: SHA256 checksum verification failed — download may be corrupt." >&2
+    exit 1
+}
+
 tar -xzf "${TMPDIR}/${ARCHIVE}" -C "$TMPDIR"
 
 mkdir -p "$INSTALL_DIR"

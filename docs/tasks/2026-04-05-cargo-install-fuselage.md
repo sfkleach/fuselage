@@ -7,84 +7,62 @@ The purpose of this task is to make it possible for people to install
 
 `Cargo.toml` already has all required metadata fields (`name`, `version`,
 `license`, `description`, `repository`, `readme`, `keywords`, `categories`,
-`rust-version`). The release workflow already includes a `publish-crate` job
-that runs `cargo publish` on stable release tags (i.e. tags without a `-`
-suffix). What remains is one-time setup and a README update.
+`rust-version`). `cargo publish` runs locally from the developer's workstation
+as part of `just publish-release` — it does NOT run from GitHub Actions. This
+is a deliberate security decision: crates.io is a separate trust domain from
+GitHub, and keeping `cargo publish` local ensures a compromised GitHub account
+cannot push a malicious crate. See
+[docs/decisions/0002-designing-installsh](../decisions/0002-designing-installsh/0002-designing-installsh.md)
+for the full analysis.
 
 ## Steps
 
-### Step 1 — Verify the crate package locally
-
-Run the following before the first publish attempt:
+### Step 1 — Verify the crate package locally [DONE]
 
 ```bash
 cargo package --list
-```
-
-Check that the tarball contains the expected files and nothing sensitive
-(no `.env`, credentials, large binaries, etc.). Also do a dry-run publish:
-
-```bash
 cargo publish --dry-run
 ```
 
-This exercises the full publish path (compilation, metadata validation) without
-actually uploading anything.
+Confirmed: 12 files, compiles cleanly, dry run passes.
 
-### Step 2 — Create a crates.io API token
+### Step 2 — Create a crates.io API token [DONE]
 
-1. Log in at [crates.io](https://crates.io) (GitHub OAuth).
-2. Go to **Account Settings → API Tokens → New Token**.
-3. Give it a descriptive name (e.g. `fuselage-github-actions`).
-4. Select scopes: `publish-new` and `publish-update`.
-5. Copy the token — it is shown only once.
+Token created at crates.io with `publish-new` and `publish-update` scopes.
+Stored in the local cargo config (`~/.cargo/credentials.toml`) — NOT in
+GitHub Actions secrets.
 
-### Step 3 — Add the token as a GitHub Actions secret
+### Step 3 — Update README installation instructions [DONE]
 
-In the repository on GitHub:
-**Settings → Secrets and variables → Actions → New repository secret**
+`cargo install fuselage` added to the Installation section of `README.md`
+with a note that `cargo install` does not set the setuid bit.
 
-- Name: `CARGO_REGISTRY_TOKEN`
-- Value: the token from Step 2.
+### Step 4 — Release pre-check
 
-The `publish-crate` job in `.github/workflows/release.yml` already reads this
-secret.
+Before each release, verify shippable state per
+[docs/process/definition-of-shippable.md](../process/definition-of-shippable.md):
 
-### Step 4 — Update README installation instructions
+- [ ] `just test` passes cleanly.
+- [ ] `just shippable` passes (CHANGELOG version matches Cargo.toml, no duplicates).
+- [ ] Manually run the `release-check.yml` workflow on GitHub and confirm it passes.
+- [ ] Push a draft tag (e.g. `v0.2.0-draft.1`) and confirm the release workflow
+  builds and produces the expected assets.
 
-Add a `cargo install` one-liner to the Installation section of `README.md`,
-below the `curl` one-liner:
+### Step 5 — Trigger a release
 
 ```bash
-cargo install fuselage
+just draft-release vX.Y.Z    # sign tag, push, wait for CI to complete
+just publish-release vX.Y.Z  # cargo publish locally + flip GitHub draft to published
 ```
 
-Note: `cargo install` does not set the setuid bit. After installing, users
-should follow the setuid-root instructions in the privilege model section to
-get full functionality.
-
-### Step 5 — Release pre-check
-
-Check we are release ready by:
-
-- [ ] Review the definition-of-done.
-- [ ] Manually running the release-check.yml workflow.
-- [ ] Update the README.md installation so that it references the new version (e.g. v0.2.0).
-- [ ] Publish a draft (e.g. v0.2.0-draft.1) and confirm it builds.
-
-### Step 6 — Trigger a release
-
-Push a stable version tag (no `-` suffix, e.g. `v0.2.0`). The release
-workflow will build binaries, create the GitHub release, and publish to
-crates.io automatically.
-
 The first publish claims the `fuselage` name on crates.io — verify it is
-not already taken before tagging.
+not already taken before the first tag.
 
 ## Notes
 
 - Crate versions are immutable on crates.io. A published version can be yanked
   (which discourages use) but not deleted or modified.
-- Pre-release tags (`-rc`) and draft tags (other `-` suffixes) are excluded
-  from publishing by the `if: ${{ !contains(github.ref_name, '-') }}` condition
-  in the workflow.
+- Pre-release (`-rc`) and draft (`-`) tags are not published to crates.io —
+  `just publish-release` skips the `cargo publish` step for those tags.
+- `CARGO_REGISTRY_TOKEN` must NOT be added as a GitHub Actions secret. The
+  token lives only in `~/.cargo/credentials.toml` on the developer's machine.

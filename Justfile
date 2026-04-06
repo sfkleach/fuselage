@@ -1,6 +1,9 @@
 default:
     @just --list
 
+shippable:
+    python3 scripts/check-changelog.py
+
 test: unittest lint fmt-check audit functest
 
 unittest:
@@ -98,6 +101,40 @@ setuid-release:
 install:
     cargo install --path .
 
+
+# Push a release tag, wait for CI to complete, then mirror checksums to Codeberg.
+# Usage: just draft-release v0.2.0
+draft-release VERSION:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Pushing tag {{VERSION}}..."
+    git tag -s "{{VERSION}}" -m "Release {{VERSION}}"
+    git push origin "{{VERSION}}"
+    echo "Waiting for release workflow to complete..."
+    gh run watch --repo sfkleach/fuselage "$(gh run list --repo sfkleach/fuselage --workflow=release.yml --limit=1 --json databaseId --jq '.[0].databaseId')"
+    echo "Release workflow complete."
+
+# Verify checksums are present then publish the draft release and push to crates.io.
+# Usage: just publish-release v0.2.0
+publish-release VERSION:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Confirm the draft release exists.
+    gh release view "{{VERSION}}" --repo sfkleach/fuselage | grep -q "draft" \
+        || { echo "ERROR: {{VERSION}} is not a draft release."; exit 1; }
+    # Publish to crates.io from the local machine — crates.io is a separate
+    # trust domain and cargo publish must not run from GitHub Actions.
+    echo "Publishing to crates.io..."
+    cargo publish
+    # Flip the GitHub draft to published (or pre-release for -rc tags).
+    if [[ "{{VERSION}}" == *"-rc"* ]]; then
+        gh release edit "{{VERSION}}" --repo sfkleach/fuselage --draft=false --prerelease
+    elif [[ "{{VERSION}}" == *"-"* ]]; then
+        echo "NOTE: {{VERSION}} looks like a draft tag — not flipping to published."
+    else
+        gh release edit "{{VERSION}}" --repo sfkleach/fuselage --draft=false
+    fi
+    echo "Released {{VERSION}}."
 
 # Initialize decision records
 init-decisions:
