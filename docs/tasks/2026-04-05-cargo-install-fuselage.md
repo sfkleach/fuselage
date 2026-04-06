@@ -63,6 +63,8 @@ not already taken before the first tag.
 - Crate versions are immutable on crates.io. A published version can be yanked
   (which discourages use) but not deleted or modified.
 - Pre-release (`-rc`) and draft (`-`) tags are not published to crates.io —
-  `just publish-release` skips the `cargo publish` step for those tags.
+  `just publish-release` skips the `cargo publish` step for any tag that
+  contains a `-` character (e.g. `v0.2.0-rc1`, `v0.2.0-draft.1`). Only
+  a clean stable tag such as `v0.2.0` triggers `cargo publish`.
 - `CARGO_REGISTRY_TOKEN` must NOT be added as a GitHub Actions secret. The
   token lives only in `~/.cargo/credentials.toml` on the developer's machine.

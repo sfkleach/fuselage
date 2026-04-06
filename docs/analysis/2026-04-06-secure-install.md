@@ -108,11 +108,12 @@ without reducing it.
    published independently on GitLab (or another independent platform). The
    procedure should be documented clearly.
 
-4. **GPG signed tags** add value as an additional signal for users who
+4. **SSH-signed tags** add value as an additional signal for users who
    independently maintain the signing key fingerprint. The public key
    fingerprint should be published on GitLab alongside the checksums so that
    users with a prior relationship can verify tag signatures. This is not
-   a first-time-user protection.
+   a first-time-user protection. SSH signing is preferred over GPG because
+   SSH keys are already in use for repository authentication.
 
 5. **The Sourcebot recommendation** protects against MITM and accidental
    corruption — real but narrow threats given HTTPS. It does not protect
@@ -125,7 +126,7 @@ without reducing it.
 - Publish checksums to an independent platform (GitLab) as a separate manual
   step in the release process, so that security-conscious users have a
   genuine second-factor verification path.
-- Publish GPG signing key fingerprint on GitLab for users who wish to verify
+- Publish SSH signing key fingerprint on GitLab for users who wish to verify
   tag signatures.
-- Consider a YubiKey for signing to close the "compromised local machine"
-  gap in the GPG story.
+- Consider a YubiKey (ed25519-sk) for signing to close the "compromised local
+  machine" gap in the signing story.

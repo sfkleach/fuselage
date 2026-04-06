@@ -1,8 +1,9 @@
 # SSH Signing for Git Commits and Tags
 
 Git supports SSH keys for signing commits and tags (since Git 2.34, GitHub
-support since 2022). Since SSH keys are already present on all machines, this
-requires minimal setup and no extra credential management.
+support since 2022). If you already use SSH keys for authentication, reusing
+one for signing requires minimal additional setup and no extra credential
+management.
 
 ## Setup
 
@@ -54,8 +55,15 @@ started at login and keys are added on first use. No extra configuration needed.
 
 ## New machines
 
-SSH keys are already on every machine. Just run the four `git config` commands
-above and add the key as a signing key on GitHub (if not already done).
+If an SSH key exists on the machine, run the four `git config` commands above
+and add the key as a signing key on GitHub (if not already done). If no SSH key
+exists yet, generate one first:
+
+```bash
+ssh-keygen -t ed25519 -C "your_email@example.com"
+```
+
+Then follow the setup steps above.
 
 ## Migration to YubiKey
 

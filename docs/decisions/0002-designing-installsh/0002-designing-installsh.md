@@ -33,10 +33,13 @@ for the full analysis. The key finding is:
    the implementation cost is negligible. The warning message makes clear
    that this is not a security guarantee against a compromised source.
 
-4. **Sign commits and tags with a GPG key** associated with the GitHub
+4. **Sign commits and tags with an SSH key** associated with the GitHub
    account. This is good practice and adds a useful signal for users who
    independently maintain the signing key fingerprint — but it is not
-   a protection mechanism for `install.sh` users.
+   a protection mechanism for `install.sh` users. SSH signing is preferred
+   over GPG because SSH keys are already in use for repository authentication,
+   requiring no separate credential infrastructure. See
+   [docs/working-practices/ssh-signing.md](../../working-practices/ssh-signing.md).
 
 ## Consequences
 
@@ -45,5 +48,3 @@ for the full analysis. The key finding is:
 - The warning in `install.sh` and the README sets correct expectations.
 - Signed commits/tags provide an audit trail and a verification path for
   security-conscious users who independently import the signing key.
-- The GPG key should be created and associated with the GitHub account as
-  a separate one-time setup step.

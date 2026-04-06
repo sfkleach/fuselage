@@ -63,8 +63,8 @@ just shippable
 Once all checks above pass:
 
 ```bash
-just draft-release vX.Y.Z   # push tag, wait for CI, mirror checksums
-just publish-release vX.Y.Z # verify checksums present, flip to published
+just draft-release vX.Y.Z   # sign and push tag, then monitor CI manually
+just publish-release vX.Y.Z # cargo publish (stable only) + flip to published
 ```
 
 See the [cargo-install task](../tasks/2026-04-05-cargo-install-fuselage.md)

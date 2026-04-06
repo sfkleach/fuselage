@@ -102,35 +102,38 @@ install:
     cargo install --path .
 
 
-# Push a release tag, wait for CI to complete, then mirror checksums to Codeberg.
+# Sign and push a release tag, triggering the GitHub Actions release workflow.
+# Monitor the workflow run manually via: gh run list --workflow=release.yml
+# Run just publish-release once CI has completed successfully.
 # Usage: just draft-release v0.2.0
 draft-release VERSION:
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "Pushing tag {{VERSION}}..."
+    echo "Signing and pushing tag {{VERSION}}..."
     git tag -s "{{VERSION}}" -m "Release {{VERSION}}"
     git push origin "{{VERSION}}"
-    echo "Waiting for release workflow to complete..."
-    gh run watch --repo sfkleach/fuselage "$(gh run list --repo sfkleach/fuselage --workflow=release.yml --limit=1 --json databaseId --jq '.[0].databaseId')"
-    echo "Release workflow complete."
+    echo "Tag pushed. Monitor CI at: https://github.com/sfkleach/fuselage/actions"
+    echo "Run 'just publish-release {{VERSION}}' once the workflow completes successfully."
 
-# Verify checksums are present then publish the draft release and push to crates.io.
+# Publish a release: push to crates.io (stable only) and publish the GitHub release.
+# Run this after draft-release and once CI has completed successfully.
 # Usage: just publish-release v0.2.0
 publish-release VERSION:
     #!/usr/bin/env bash
     set -euo pipefail
-    # Confirm the draft release exists.
-    gh release view "{{VERSION}}" --repo sfkleach/fuselage | grep -q "draft" \
-        || { echo "ERROR: {{VERSION}} is not a draft release."; exit 1; }
-    # Publish to crates.io from the local machine — crates.io is a separate
-    # trust domain and cargo publish must not run from GitHub Actions.
-    echo "Publishing to crates.io..."
-    cargo publish
-    # Flip the GitHub draft to published (or pre-release for -rc tags).
+    # Only publish to crates.io for stable releases (no - suffix).
+    # Pre-release (-rc) and draft (-) tags are not published to crates.io.
+    if [[ "{{VERSION}}" != *"-"* ]]; then
+        echo "Publishing to crates.io..."
+        cargo publish
+    else
+        echo "Skipping crates.io publish for non-stable tag {{VERSION}}."
+    fi
+    # Flip the GitHub release to published (or pre-release for -rc tags).
     if [[ "{{VERSION}}" == *"-rc"* ]]; then
         gh release edit "{{VERSION}}" --repo sfkleach/fuselage --draft=false --prerelease
     elif [[ "{{VERSION}}" == *"-"* ]]; then
-        echo "NOTE: {{VERSION}} looks like a draft tag — not flipping to published."
+        echo "NOTE: {{VERSION}} is a draft tag — not flipping to published."
     else
         gh release edit "{{VERSION}}" --repo sfkleach/fuselage --draft=false
     fi
