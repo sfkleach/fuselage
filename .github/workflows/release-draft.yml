@@ -1,4 +1,4 @@
-name: Release
+name: Release Draft
 
 on:
   push:
@@ -40,7 +40,7 @@ jobs:
       with:
         body: ${{ steps.notes.outputs.body }}
         prerelease: ${{ contains(github.ref_name, '-rc') }}
-        draft: ${{ contains(github.ref_name, '-') && !contains(github.ref_name, '-rc') }}
+        draft: true
 
   upload-binaries:
     needs: create-release
