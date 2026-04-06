@@ -22,7 +22,7 @@ curl -sSfL https://raw.githubusercontent.com/sfkleach/fuselage/main/install.sh |
 ```
 
 GitHub is the trust anchor for **everything**: the binary, the checksums, the
-documentation, the GPG key references, and the script that performs any
+documentation, the GPG/SSH key references, and the script that performs any
 verification. A compromised GitHub account can replace all of these
 simultaneously. Any verification mechanism implemented inside `install.sh` can
 be silently removed by the same attacker.
@@ -40,12 +40,12 @@ GitHub account can upload a matching checksum for a malicious binary in the
 same workflow. Checksums hosted on GitHub protect against MITM and accidental
 corruption only. Against a compromised GitHub account: no protection.
 
-### GPG signature verification
+### GPG/SSH signature verification
 
-GPG is the canonical answer to this class of problem, but it has a critical
-bootstrapping weakness: the user must obtain the signing key fingerprint
-out-of-band, from a source they independently trust, *before* any compromise
-occurs.
+GPG (or SSH signing, which has the same trust properties) is the canonical
+answer to this class of problem, but both share a critical bootstrapping
+weakness: the user must obtain the signing key fingerprint out-of-band, from a
+source they independently trust, *before* any compromise occurs.
 
 - If the public key reference is in the GitHub-hosted documentation or
   `install.sh`, a compromised account replaces it with the attacker's key.
@@ -55,11 +55,11 @@ occurs.
 - Key revocation does not help: an attacker simply presents a new unrevoked key
   and updates all reachable references to it.
 
-GPG provides genuine protection only for users who:
+GPG/SSH signing provides genuine protection only for users who:
 1. Obtained the key fingerprint out-of-band before any compromise, AND
 2. Independently verify any subsequent key rotation
 
-This is a small minority of users. For everyone else, GPG verification via
+This is a small minority of users. For everyone else, signature verification via
 `install.sh` is security theatre.
 
 ### Two-platform checksum comparison
@@ -108,12 +108,12 @@ without reducing it.
    published independently on GitLab (or another independent platform). The
    procedure should be documented clearly.
 
-4. **SSH-signed tags** add value as an additional signal for users who
+4. **GPG/SSH-signed tags** add value as an additional signal for users who
    independently maintain the signing key fingerprint. The public key
    fingerprint should be published on GitLab alongside the checksums so that
    users with a prior relationship can verify tag signatures. This is not
-   a first-time-user protection. SSH signing is preferred over GPG because
-   SSH keys are already in use for repository authentication.
+   a first-time-user protection. SSH signing is preferred over GPG for this
+   project because SSH keys are already in use for repository authentication.
 
 5. **The Sourcebot recommendation** protects against MITM and accidental
    corruption — real but narrow threats given HTTPS. It does not protect
@@ -126,7 +126,7 @@ without reducing it.
 - Publish checksums to an independent platform (GitLab) as a separate manual
   step in the release process, so that security-conscious users have a
   genuine second-factor verification path.
-- Publish SSH signing key fingerprint on GitLab for users who wish to verify
+- Publish GPG/SSH signing key fingerprint on GitLab for users who wish to verify
   tag signatures.
 - Consider a YubiKey (ed25519-sk) for signing to close the "compromised local
   machine" gap in the signing story.
