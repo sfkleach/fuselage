@@ -2,7 +2,7 @@
 
 Following the style in https://keepachangelog.com/en/1.0.0/
 
-## v0.2.1, cargo binstall
+## v0.2.3, cargo binstall
 
 ### Added
 
