@@ -2,6 +2,14 @@
 
 Following the style in https://keepachangelog.com/en/1.0.0/
 
+## v0.2.5, Revised publish process
+
+### Changed
+
+- Release workflow split into `release-draft.yml` (builds and creates a draft release)
+  and `release-publish.yml` (flips draft to published and runs `cargo publish` via
+  trusted publisher). No local crates.io token required.
+
 ## v0.2.4, cargo binstall
 
 ### Added
