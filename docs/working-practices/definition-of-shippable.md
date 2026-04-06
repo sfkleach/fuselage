@@ -58,7 +58,7 @@ security audit. No failures, no warnings promoted to errors.
 
 - [ ] Confirm the crate name is not already taken:
   `curl -sSf https://crates.io/api/v1/crates/fuselage` → should 404.
-- [ ] Run `cargo publish --dry-run --allow-dirty` locally and confirm it passes.
+- [ ] Run `cargo publish --dry-run` locally and confirm it passes.
 
 ## Tagging and publishing
 
@@ -66,6 +66,11 @@ Confirm the working tree is clean (`git status`) — `just draft-release` will
 refuse to tag a dirty tree.
 
 ```bash
-just draft-release vX.Y.Z   # sign and push tag, then monitor CI manually
-just publish-release vX.Y.Z # cargo publish (stable only) + flip to published
+just draft-release vX.Y.Z   # sign and push tag; triggers release-draft.yml
+                              # monitor CI and review the draft release on GitHub
+just publish-release vX.Y.Z  # triggers release-publish.yml on GitHub Actions,
+                              # which runs cargo publish and flips the draft to published
 ```
+
+`just publish-release` only accepts stable tags (`vX.Y.Z` with no suffix).
+`cargo publish` runs in CI via the trusted publisher — no local crates.io token required.
