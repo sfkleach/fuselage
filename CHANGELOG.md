@@ -2,6 +2,10 @@
 
 Following the style in https://keepachangelog.com/en/1.0.0/
 
+## Unreleased
+
+To be completed ...
+
 ## v0.2.5, Revised publish process
 
 ### Changed
