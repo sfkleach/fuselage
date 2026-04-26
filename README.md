@@ -2,13 +2,13 @@
 
 [![Build and Test](https://github.com/sfkleach/fuselage/actions/workflows/build-and-test.yml/badge.svg?branch=main)](https://github.com/sfkleach/fuselage/actions/workflows/build-and-test.yml)
 
-Run a command with ephemeral, namespace-private filesystems derived from zip archives.
+Run a command with ephemeral, namespace-private filesystems derived from zip or squashfs archives.
 No containers, no daemons, no manual cleanup.
 
 ## Overview
 
-`fuselage` creates a private Linux mount namespace for a command, unpacks zip archives into
-it, then execs the command. When the command exits the mounts vanish automatically.
+`fuselage` creates a private Linux mount namespace for a command, unpacks zip or squashfs
+archives into it, then execs the command. When the command exits the mounts vanish automatically.
 
 There is no isolation beyond the mount namespace — the process keeps its normal environment,
 PID space, and network.
@@ -25,12 +25,17 @@ fuselage [OPTIONS...] --run PATH [ARG...]
 | Option | Description |
 |---|---|
 | `--dynamic=[NAME:]FILE` | Extract `FILE` into a fresh, mutable directory at `$FUSELAGE_DYNAMIC/NAME/` |
-| `--static=[NAME:]FILE` | Extract `FILE` into a cached, read-only directory at `$FUSELAGE_STATIC/NAME/` |
+| `--static=[NAME:]FILE` | Mount or extract `FILE` into a cached, read-only directory at `$FUSELAGE_STATIC/NAME/` |
+| `--cache-static` | Convert zip `--static` archives to squashfs for faster subsequent runs (requires `mksquashfs`) |
 | `--run PATH [ARG...]` | Find `PATH` in extracted archives and execute it |
 
-`FILE` is a zip file or a text file containing base64-encoded zip data.
-`NAME` defaults to the filename stem (e.g. `my-data.zip` → `my-data`).
+`FILE` is a zip file, a squashfs image (`.sfs`), or a text file containing base64-encoded zip or squashfs data.
+`NAME` defaults to the filename stem (e.g. `my-data.zip` → `my-data`, `my-data.sfs` → `my-data`).
 All archive names must be unique; use `NAME:` to disambiguate.
+
+Squashfs images are the most efficient format for `--static` archives: in setuid-root mode they are
+loop-mounted read-only directly from the file, with no extraction to disk. Create them with `mksquashfs`
+from the `squashfs-tools` package.
 
 ### Environment variables set for the child process
 
