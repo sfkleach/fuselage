@@ -14,14 +14,34 @@ pub enum ArchiveFormat {
     ElfSquashfs(u64),
 }
 
-/// Parsed `[NAME:]FILE` archive specification.
+/// The mount-point name for an archive, which is either a plain relative name
+/// (mounted under the procdir) or a fixed absolute path under `/run/fuselage/`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MountName {
+    /// A plain name such as `mydata`, mounted under the procdir.
+    Relative(String),
+    /// An absolute path `/run/fuselage/NAME`, mounted directly at that path.
+    Fixed(PathBuf),
+}
+
+impl MountName {
+    /// The plain name component (the last path segment for fixed paths).
+    pub fn as_str(&self) -> &str {
+        match self {
+            MountName::Relative(s) => s.as_str(),
+            MountName::Fixed(p) => p.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+        }
+    }
+}
+
+/// Parsed `[NAME:]FILE` or `/run/fuselage/NAME:FILE` archive specification.
 pub struct ArchiveSpec {
-    pub name: String,
+    pub mount: MountName,
     pub file: PathBuf,
 }
 
 impl ArchiveSpec {
-    /// Parse a `[NAME:]FILE` argument.
+    /// Parse a `[NAME:]FILE` or `/run/fuselage/NAME:FILE` argument.
     ///
     /// If the argument contains a colon, it is treated as `NAME:FILE` unless
     /// the whole string is itself a valid file path (handles colons in filenames).
@@ -31,24 +51,23 @@ impl ArchiveSpec {
             // The whole arg might be a file that happens to contain a colon.
             let whole = Path::new(arg);
             if whole.is_file() {
-                let name = stem(arg);
-                validate_name(&name, arg)?;
+                let mount = parse_mount_name(arg, arg)?;
                 return Ok(Self {
-                    name,
+                    mount,
                     file: whole
                         .canonicalize()
                         .with_context(|| format!("failed to resolve path {}", whole.display()))?,
                 });
             }
             // Otherwise treat it as NAME:FILE.
-            let name = arg[..colon].to_string();
-            validate_name(&name, arg)?;
+            let name_part = &arg[..colon];
+            let mount = parse_mount_name(name_part, arg)?;
             let file = Path::new(&arg[colon + 1..]);
             if !file.is_file() {
                 anyhow::bail!("archive file not found: {}", file.display());
             }
             Ok(Self {
-                name,
+                mount,
                 file: file
                     .canonicalize()
                     .with_context(|| format!("failed to resolve path {}", file.display()))?,
@@ -59,9 +78,9 @@ impl ArchiveSpec {
                 anyhow::bail!("archive file not found: {}", file.display());
             }
             let name = stem(arg);
-            validate_name(&name, arg)?;
+            let mount = parse_mount_name(&name, arg)?;
             Ok(Self {
-                name,
+                mount,
                 file: file
                     .canonicalize()
                     .with_context(|| format!("failed to resolve path {}", file.display()))?,
@@ -70,7 +89,52 @@ impl ArchiveSpec {
     }
 }
 
-/// Validate that a derived or explicit archive name is usable as a directory name.
+/// Parsed `--dynamic-empty` specification: either a plain name or a fixed path.
+pub struct EmptySpec {
+    pub mount: MountName,
+}
+
+impl EmptySpec {
+    /// Parse a `NAME` or `/run/fuselage/NAME` argument.
+    pub fn parse(arg: &str) -> Result<Self> {
+        let mount = parse_mount_name(arg, arg)?;
+        Ok(Self { mount })
+    }
+}
+
+/// Parse a name-or-path string into a `MountName`.
+///
+/// Accepts either a plain relative name (validated by `validate_name`) or an
+/// absolute path of the form `/run/fuselage/<single-component>`. Any other
+/// absolute path is rejected with a clear error.
+pub fn parse_mount_name(name: &str, source: &str) -> Result<MountName> {
+    if let Some(rest) = name.strip_prefix("/run/fuselage/") {
+        // Must be exactly one further component — no slashes, no empty tail.
+        if rest.is_empty() || rest.contains('/') || rest.contains('\0') {
+            anyhow::bail!(
+                "fixed mount path {:?} must have exactly one component after /run/fuselage/ \
+                 (e.g. /run/fuselage/myapp)",
+                name
+            );
+        }
+        if rest == "." || rest == ".." {
+            anyhow::bail!("fixed mount path {:?} is not a valid directory name", name);
+        }
+        Ok(MountName::Fixed(PathBuf::from(name)))
+    } else if name.starts_with('/') {
+        anyhow::bail!(
+            "absolute mount path {:?} (from {:?}) is not allowed; \
+             only /run/fuselage/NAME paths are permitted",
+            name,
+            source
+        );
+    } else {
+        validate_name(name, source)?;
+        Ok(MountName::Relative(name.to_string()))
+    }
+}
+
+/// Validate that a relative archive name is usable as a directory name.
 ///
 /// A name must be non-empty, must not contain `/` or a null byte, and must not
 /// be `.` or `..`. These are the minimal requirements for a safe directory name
