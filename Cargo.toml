@@ -41,6 +41,8 @@ nix = { version = "0.29", features = ["mount", "user", "sched", "signal", "proce
 backhand = "0.25"
 # Linux loop device management for squashfs loop-mounting (privileged mode)
 loopdev-3 = "0.5"
+# ELF header parsing (byte-order-aware integer reads)
+byteorder = "1"
 # Error handling
 anyhow = "1"
 thiserror = "2"

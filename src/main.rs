@@ -102,7 +102,10 @@ fn main() -> Result<()> {
             match fmt {
                 archive::ArchiveFormat::Zip => archive::extract_zip(&archive_file, &dest)?,
                 archive::ArchiveFormat::Squashfs => {
-                    archive::extract_squashfs(&archive_file, &dest)?
+                    archive::extract_squashfs(&archive_file, &dest, 0)?
+                }
+                archive::ArchiveFormat::ElfSquashfs(offset) => {
+                    archive::extract_squashfs(&archive_file, &dest, offset)?
                 }
             }
         }
@@ -121,10 +124,10 @@ fn main() -> Result<()> {
 
     // Collected mount actions — executed after chown.
     enum MountAction {
-        LoopSfs(std::path::PathBuf),          // loop-mount .sfs onto dest
-        ExtractSfsBindRo(std::path::PathBuf), // extract .sfs to dest, then bind-ro
-        BindRoSelf,                           // dest already has content; bind-ro it
-        BindRoFrom(std::path::PathBuf),       // bind-mount from external dir to dest
+        LoopSfs(std::path::PathBuf, u64), // loop-mount .sfs onto dest with byte offset
+        ExtractSfsBindRo(std::path::PathBuf, u64), // extract .sfs to dest (with offset), then bind-ro
+        BindRoSelf,                                // dest already has content; bind-ro it
+        BindRoFrom(std::path::PathBuf),            // bind-mount from external dir to dest
     }
     let mut mount_actions: Vec<(std::path::PathBuf, MountAction)> = Vec::new();
 
@@ -140,9 +143,18 @@ fn main() -> Result<()> {
                 // Use directly — no caching needed, the file is already optimal.
                 archive::ArchiveFormat::Squashfs => {
                     if is_privileged {
-                        MountAction::LoopSfs(archive_file)
+                        MountAction::LoopSfs(archive_file, 0)
                     } else {
-                        MountAction::ExtractSfsBindRo(archive_file)
+                        MountAction::ExtractSfsBindRo(archive_file, 0)
+                    }
+                }
+
+                // ── ELF+squashfs input ───────────────────────────────────────
+                archive::ArchiveFormat::ElfSquashfs(offset) => {
+                    if is_privileged {
+                        MountAction::LoopSfs(archive_file, offset)
+                    } else {
+                        MountAction::ExtractSfsBindRo(archive_file, offset)
                     }
                 }
 
@@ -182,9 +194,9 @@ fn main() -> Result<()> {
 
                     if sfs_path.exists() {
                         if is_privileged {
-                            MountAction::LoopSfs(sfs_path)
+                            MountAction::LoopSfs(sfs_path, 0)
                         } else {
-                            MountAction::ExtractSfsBindRo(sfs_path)
+                            MountAction::ExtractSfsBindRo(sfs_path, 0)
                         }
                     } else {
                         // Directory cache (mksquashfs fallback).
@@ -209,11 +221,11 @@ fn main() -> Result<()> {
     // Phase 3: apply deferred mounts.
     for (dest, action) in mount_actions {
         match action {
-            MountAction::LoopSfs(sfs) => {
-                procdir::loop_mount_sfs(&sfs, &dest)?;
+            MountAction::LoopSfs(sfs, offset) => {
+                procdir::loop_mount_sfs(&sfs, &dest, offset)?;
             }
-            MountAction::ExtractSfsBindRo(sfs) => {
-                archive::extract_squashfs(&sfs, &dest)?;
+            MountAction::ExtractSfsBindRo(sfs, offset) => {
+                archive::extract_squashfs(&sfs, &dest, offset)?;
                 procdir::bind_mount_readonly(&dest)?;
             }
             MountAction::BindRoSelf => {

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 pub enum ArchiveFormat {
     Zip,
     Squashfs,
+    /// An ELF binary with an embedded squashfs image starting at the given byte offset.
+    ElfSquashfs(u64),
 }
 
 /// Parsed `[NAME:]FILE` archive specification.
@@ -198,12 +200,214 @@ pub fn detect_format(path: &Path) -> Result<ArchiveFormat> {
     match &magic {
         b"PK\x03\x04" => Ok(ArchiveFormat::Zip),
         b"hsqs" | b"sqsh" => Ok(ArchiveFormat::Squashfs),
+        b"\x7fELF" => detect_elf_squashfs(f, path),
         _ => anyhow::bail!(
             "{}: unrecognised archive format (magic {:02x?})",
             path.display(),
             magic
         ),
     }
+}
+
+/// Given a file whose first 4 bytes are ELF magic, locate the squashfs image
+/// embedded immediately after the last PT_LOAD segment (rounded up to a 4096-byte
+/// boundary) and return `ArchiveFormat::ElfSquashfs(offset)`.
+///
+/// The offset is derived from ELF structure rather than a magic-byte scan, so
+/// coincidental squashfs magic inside the ELF body cannot produce a false positive.
+fn detect_elf_squashfs(mut f: fs::File, path: &Path) -> Result<ArchiveFormat> {
+    // Read the remaining ELF identification bytes (e_ident is 16 bytes total;
+    // we already consumed the first 4).
+    let mut e_ident_rest = [0u8; 12];
+    f.read_exact(&mut e_ident_rest)
+        .with_context(|| format!("failed to read ELF ident from {}", path.display()))?;
+
+    let class = e_ident_rest[0]; // EI_CLASS: 1 = 32-bit, 2 = 64-bit
+    let data = e_ident_rest[1]; // EI_DATA:  1 = LE, 2 = BE
+
+    // We only support the combinations that AppImages actually use (LE/BE × 32/64).
+    let squashfs_offset = match (class, data) {
+        (1, 1) => elf_squashfs_offset_32::<byteorder::LittleEndian>(&mut f, path),
+        (1, 2) => elf_squashfs_offset_32::<byteorder::BigEndian>(&mut f, path),
+        (2, 1) => elf_squashfs_offset_64::<byteorder::LittleEndian>(&mut f, path),
+        (2, 2) => elf_squashfs_offset_64::<byteorder::BigEndian>(&mut f, path),
+        _ => anyhow::bail!(
+            "{}: ELF file has unsupported class/data encoding ({}/{})",
+            path.display(),
+            class,
+            data
+        ),
+    }?;
+
+    // Verify squashfs magic at the computed offset.
+    f.seek(SeekFrom::Start(squashfs_offset))
+        .with_context(|| format!("failed to seek in {}", path.display()))?;
+    let mut sfs_magic = [0u8; 4];
+    f.read_exact(&mut sfs_magic).with_context(|| {
+        format!(
+            "{}: ELF file has no squashfs image at expected offset {}",
+            path.display(),
+            squashfs_offset
+        )
+    })?;
+    if &sfs_magic != b"hsqs" && &sfs_magic != b"sqsh" {
+        anyhow::bail!(
+            "{}: ELF file has no squashfs image at expected offset {} (found {:02x?})",
+            path.display(),
+            squashfs_offset,
+            sfs_magic
+        );
+    }
+
+    Ok(ArchiveFormat::ElfSquashfs(squashfs_offset))
+}
+
+/// Read `count` program header entries for a 32-bit ELF and return the byte offset
+/// immediately after the last PT_LOAD segment, rounded up to a 4096-byte boundary.
+fn elf_squashfs_offset_32<B: byteorder::ByteOrder>(f: &mut fs::File, path: &Path) -> Result<u64> {
+    use byteorder::ReadBytesExt;
+
+    // e_ident (16) already consumed. Read the rest of the 52-byte ELF32 header.
+    // Fields: e_type(2), e_machine(2), e_version(4), e_entry(4), e_phoff(4),
+    //         e_shoff(4), e_flags(4), e_ehsize(2), e_phentsize(2), e_phnum(2),
+    //         e_shentsize(2), e_shnum(2), e_shstrndx(2)  → 36 bytes remaining.
+    let _e_type = f.read_u16::<B>()?;
+    let _e_machine = f.read_u16::<B>()?;
+    let _e_version = f.read_u32::<B>()?;
+    let _e_entry = f.read_u32::<B>()?;
+    let e_phoff = f.read_u32::<B>()? as u64;
+    let _e_shoff = f.read_u32::<B>()?;
+    let _e_flags = f.read_u32::<B>()?;
+    let _e_ehsize = f.read_u16::<B>()?;
+    let e_phentsize = f.read_u16::<B>()? as u64;
+    let e_phnum = f.read_u16::<B>()? as u64;
+
+    highest_pt_load_end_32::<B>(f, path, e_phoff, e_phentsize, e_phnum)
+}
+
+/// Read `count` program header entries for a 64-bit ELF and return the byte offset
+/// immediately after the last PT_LOAD segment, rounded up to a 4096-byte boundary.
+fn elf_squashfs_offset_64<B: byteorder::ByteOrder>(f: &mut fs::File, path: &Path) -> Result<u64> {
+    use byteorder::ReadBytesExt;
+
+    // e_ident (16) already consumed. Read the rest of the 64-byte ELF64 header.
+    // Fields: e_type(2), e_machine(2), e_version(4), e_entry(8), e_phoff(8),
+    //         e_shoff(8), e_flags(4), e_ehsize(2), e_phentsize(2), e_phnum(2),
+    //         e_shentsize(2), e_shnum(2), e_shstrndx(2)  → 48 bytes remaining.
+    let _e_type = f.read_u16::<B>()?;
+    let _e_machine = f.read_u16::<B>()?;
+    let _e_version = f.read_u32::<B>()?;
+    let _e_entry = f.read_u64::<B>()?;
+    let e_phoff = f.read_u64::<B>()?;
+    let _e_shoff = f.read_u64::<B>()?;
+    let _e_flags = f.read_u32::<B>()?;
+    let _e_ehsize = f.read_u16::<B>()?;
+    let e_phentsize = f.read_u16::<B>()? as u64;
+    let e_phnum = f.read_u16::<B>()? as u64;
+
+    highest_pt_load_end_64::<B>(f, path, e_phoff, e_phentsize, e_phnum)
+}
+
+/// Scan 32-bit program headers and return the 4096-aligned end of the last PT_LOAD segment.
+fn highest_pt_load_end_32<B: byteorder::ByteOrder>(
+    f: &mut fs::File,
+    path: &Path,
+    e_phoff: u64,
+    e_phentsize: u64,
+    e_phnum: u64,
+) -> Result<u64> {
+    use byteorder::ReadBytesExt;
+
+    const PT_LOAD: u32 = 1;
+    let mut highest_end: u64 = 0;
+
+    for i in 0..e_phnum {
+        let entry_offset = e_phoff + i * e_phentsize;
+        f.seek(SeekFrom::Start(entry_offset)).with_context(|| {
+            format!(
+                "failed to seek to program header {} in {}",
+                i,
+                path.display()
+            )
+        })?;
+
+        // ELF32 Phdr: p_type(4), p_offset(4), p_vaddr(4), p_paddr(4),
+        //             p_filesz(4), p_memsz(4), p_flags(4), p_align(4)
+        let p_type = f.read_u32::<B>()?;
+        let p_offset = f.read_u32::<B>()? as u64;
+        let _p_vaddr = f.read_u32::<B>()?;
+        let _p_paddr = f.read_u32::<B>()?;
+        let p_filesz = f.read_u32::<B>()? as u64;
+
+        if p_type == PT_LOAD {
+            let end = p_offset + p_filesz;
+            if end > highest_end {
+                highest_end = end;
+            }
+        }
+    }
+
+    anyhow::ensure!(
+        highest_end > 0,
+        "{}: ELF file has no PT_LOAD segments",
+        path.display()
+    );
+
+    Ok(align_up(highest_end, 4096))
+}
+
+/// Scan 64-bit program headers and return the 4096-aligned end of the last PT_LOAD segment.
+fn highest_pt_load_end_64<B: byteorder::ByteOrder>(
+    f: &mut fs::File,
+    path: &Path,
+    e_phoff: u64,
+    e_phentsize: u64,
+    e_phnum: u64,
+) -> Result<u64> {
+    use byteorder::ReadBytesExt;
+
+    const PT_LOAD: u32 = 1;
+    let mut highest_end: u64 = 0;
+
+    for i in 0..e_phnum {
+        let entry_offset = e_phoff + i * e_phentsize;
+        f.seek(SeekFrom::Start(entry_offset)).with_context(|| {
+            format!(
+                "failed to seek to program header {} in {}",
+                i,
+                path.display()
+            )
+        })?;
+
+        // ELF64 Phdr: p_type(4), p_flags(4), p_offset(8), p_vaddr(8), p_paddr(8),
+        //             p_filesz(8), p_memsz(8), p_align(8)
+        let p_type = f.read_u32::<B>()?;
+        let _p_flags = f.read_u32::<B>()?;
+        let p_offset = f.read_u64::<B>()?;
+        let _p_vaddr = f.read_u64::<B>()?;
+        let _p_paddr = f.read_u64::<B>()?;
+        let p_filesz = f.read_u64::<B>()?;
+
+        if p_type == PT_LOAD {
+            let end = p_offset + p_filesz;
+            if end > highest_end {
+                highest_end = end;
+            }
+        }
+    }
+
+    anyhow::ensure!(
+        highest_end > 0,
+        "{}: ELF file has no PT_LOAD segments",
+        path.display()
+    );
+
+    Ok(align_up(highest_end, 4096))
+}
+
+/// Round `value` up to the nearest multiple of `align` (which must be a power of two).
+fn align_up(value: u64, align: u64) -> u64 {
+    (value + align - 1) & !(align - 1)
 }
 
 /// Compute the SHA-256 hash of a file and return the first 16 hex characters.
@@ -241,15 +445,18 @@ pub fn extract_zip(archive: &Path, dest: &Path) -> Result<()> {
 
 /// Extract a squashfs image into `dest` using the `backhand` library.
 ///
+/// `offset` is the byte offset within `sfs` at which the squashfs image begins;
+/// pass `0` for a standalone squashfs file.
+///
 /// Creates the directory hierarchy, regular files (with permissions), and
 /// symlinks. Device nodes, named pipes, and sockets are skipped.
-pub fn extract_squashfs(sfs: &Path, dest: &Path) -> Result<()> {
+pub fn extract_squashfs(sfs: &Path, dest: &Path, offset: u64) -> Result<()> {
     use backhand::{FilesystemReader, InnerNode};
 
     let file = BufReader::new(
         fs::File::open(sfs).with_context(|| format!("failed to open {}", sfs.display()))?,
     );
-    let filesystem = FilesystemReader::from_reader(file)
+    let filesystem = FilesystemReader::from_reader_with_offset(file, offset)
         .with_context(|| format!("failed to read squashfs image {}", sfs.display()))?;
 
     for node in filesystem.files() {
@@ -538,5 +745,109 @@ mod tests {
     #[test]
     fn validate_name_rejects_null_byte() {
         assert!(validate_name("foo\0bar", "foo\0bar.zip").is_err());
+    }
+
+    // ── detect_format() — ELF+squashfs ────────────────────────────────────────
+
+    /// Build a minimal 64-bit little-endian ELF with one PT_LOAD segment followed
+    /// by a squashfs magic cookie at a 4096-byte-aligned offset.
+    ///
+    /// ELF64 header: 64 bytes.
+    /// ELF64 Phdr:   56 bytes (one entry).
+    /// Total ELF content: 64 + 56 = 120 bytes → aligns up to 4096.
+    fn make_elf64_le_with_squashfs(sfs_magic: &[u8; 4]) -> Vec<u8> {
+        let mut buf = vec![0u8; 4096 + 8];
+
+        // e_ident
+        buf[0..4].copy_from_slice(b"\x7fELF");
+        buf[4] = 2; // ELFCLASS64
+        buf[5] = 1; // ELFDATA2LSB
+        buf[6] = 1; // EV_CURRENT
+        // bytes 7-15: padding (zeroes)
+
+        // e_type, e_machine, e_version  (2+2+4 = 8 bytes at offset 16)
+        buf[16..18].copy_from_slice(&2u16.to_le_bytes()); // ET_EXEC
+        buf[18..20].copy_from_slice(&0x3eu16.to_le_bytes()); // EM_X86_64
+        buf[20..24].copy_from_slice(&1u32.to_le_bytes()); // EV_CURRENT
+
+        // e_entry (8), e_phoff (8), e_shoff (8)
+        buf[24..32].copy_from_slice(&0u64.to_le_bytes()); // e_entry
+        buf[32..40].copy_from_slice(&64u64.to_le_bytes()); // e_phoff: right after header
+        buf[40..48].copy_from_slice(&0u64.to_le_bytes()); // e_shoff: no section headers
+
+        // e_flags (4), e_ehsize (2), e_phentsize (2), e_phnum (2),
+        // e_shentsize (2), e_shnum (2), e_shstrndx (2)
+        buf[48..52].copy_from_slice(&0u32.to_le_bytes()); // e_flags
+        buf[52..54].copy_from_slice(&64u16.to_le_bytes()); // e_ehsize
+        buf[54..56].copy_from_slice(&56u16.to_le_bytes()); // e_phentsize
+        buf[56..58].copy_from_slice(&1u16.to_le_bytes()); // e_phnum
+        buf[58..60].copy_from_slice(&64u16.to_le_bytes()); // e_shentsize
+        buf[60..62].copy_from_slice(&0u16.to_le_bytes()); // e_shnum
+        buf[62..64].copy_from_slice(&0u16.to_le_bytes()); // e_shstrndx
+
+        // ELF64 Phdr at offset 64:
+        // p_type(4), p_flags(4), p_offset(8), p_vaddr(8), p_paddr(8),
+        // p_filesz(8), p_memsz(8), p_align(8)
+        buf[64..68].copy_from_slice(&1u32.to_le_bytes()); // PT_LOAD
+        buf[68..72].copy_from_slice(&5u32.to_le_bytes()); // PF_R|PF_X
+        buf[72..80].copy_from_slice(&0u64.to_le_bytes()); // p_offset: starts at 0
+        buf[80..88].copy_from_slice(&0u64.to_le_bytes()); // p_vaddr
+        buf[88..96].copy_from_slice(&0u64.to_le_bytes()); // p_paddr
+        buf[96..104].copy_from_slice(&120u64.to_le_bytes()); // p_filesz: 64+56 bytes
+        buf[104..112].copy_from_slice(&120u64.to_le_bytes()); // p_memsz
+        buf[112..120].copy_from_slice(&4096u64.to_le_bytes()); // p_align
+
+        // Squashfs magic immediately after the aligned ELF end (offset 4096).
+        buf[4096..4100].copy_from_slice(sfs_magic);
+
+        buf
+    }
+
+    #[test]
+    fn detect_format_elf64_le_squashfs_little_endian() {
+        let bytes = make_elf64_le_with_squashfs(b"hsqs");
+        let f = write_tmp(&bytes);
+        match detect_format(f.path()).unwrap() {
+            ArchiveFormat::ElfSquashfs(offset) => assert_eq!(offset, 4096),
+            other => panic!("expected ElfSquashfs, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn detect_format_elf64_le_squashfs_big_endian() {
+        let bytes = make_elf64_le_with_squashfs(b"sqsh");
+        let f = write_tmp(&bytes);
+        match detect_format(f.path()).unwrap() {
+            ArchiveFormat::ElfSquashfs(offset) => assert_eq!(offset, 4096),
+            other => panic!("expected ElfSquashfs, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn detect_format_elf_without_squashfs_is_error() {
+        // ELF file with no squashfs appended — should return an error.
+        let mut bytes = make_elf64_le_with_squashfs(b"hsqs");
+        // Overwrite the squashfs magic with garbage.
+        bytes[4096..4100].copy_from_slice(b"\x00\x00\x00\x00");
+        let f = write_tmp(&bytes);
+        assert!(
+            detect_format(f.path()).is_err(),
+            "ELF without squashfs should be an error"
+        );
+    }
+
+    #[test]
+    fn align_up_already_aligned() {
+        assert_eq!(align_up(4096, 4096), 4096);
+    }
+
+    #[test]
+    fn align_up_one_past() {
+        assert_eq!(align_up(4097, 4096), 8192);
+    }
+
+    #[test]
+    fn align_up_zero() {
+        assert_eq!(align_up(0, 4096), 0);
     }
 }

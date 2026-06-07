@@ -95,12 +95,16 @@ pub fn cache_dir(home: &Path) -> PathBuf {
 
 /// Attach `sfs` to a fresh loop device and mount it read-only on `dest`.
 ///
+/// `offset` is the byte offset within `sfs` at which the squashfs image begins;
+/// pass `0` for a standalone squashfs file. The loop device's `lo_offset` field
+/// is set accordingly so the kernel squashfs driver sees only the embedded image.
+///
 /// Uses `LO_FLAGS_AUTOCLEAR` so the loop device detaches itself automatically
 /// when the mount is removed (i.e. when the namespace is destroyed on exit).
 /// No explicit cleanup is needed.
 ///
 /// Requires `CAP_SYS_ADMIN` (real root or setuid-root mode).
-pub fn loop_mount_sfs(sfs: &Path, dest: &Path) -> Result<()> {
+pub fn loop_mount_sfs(sfs: &Path, dest: &Path, offset: u64) -> Result<()> {
     use loopdev::LoopControl;
 
     let ctrl = LoopControl::open().context("failed to open /dev/loop-control")?;
@@ -109,6 +113,7 @@ pub fn loop_mount_sfs(sfs: &Path, dest: &Path) -> Result<()> {
     dev.with()
         .read_only(true)
         .autoclear(true)
+        .offset(offset)
         .attach(sfs)
         .with_context(|| format!("failed to attach {} to loop device", sfs.display()))?;
 
