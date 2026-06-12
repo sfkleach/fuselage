@@ -47,6 +47,10 @@ byteorder = "1"
 anyhow = "1"
 thiserror = "2"
 
+[[bin]]
+name = "fuselage-pack"
+path = "src/bin/fuselage_pack.rs"
+
 [dev-dependencies]
 # Backdate file mtimes in unit tests for reap_cache() without sleeping.
 filetime = "0.2"

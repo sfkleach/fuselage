@@ -26,17 +26,20 @@ AppImage Type 2.
 ## Invocation
 
 ```
-fuselage-pack [FUSELAGE_OPTIONS...] --archive=SQUASHFS --output BINARY_FILE 
+fuselage-pack --archive=SQUASHFS --output BINARY_FILE -- [FUSELAGE_OPTIONS...] 
 ```
 
 Example:
 
 ```bash
 fuselage-pack \
-  --static=/run/fuselage/myapp:/proc/self/exe \
-  --run /run/fuselage/myapp/.venv/bin/python -m myapp
   --archive=myapp.sfs \
   --output=myapp
+  --\
+  --static=/run/fuselage/myapp:/proc/self/exe \
+  --run /run/fuselage/myapp/.venv/bin/python \
+  -- \
+  -m myapp
 ```
 
 The resulting `myapp` binary, when executed as `myapp ARGS...`, does the equivalent of:
@@ -44,14 +47,14 @@ The resulting `myapp` binary, when executed as `myapp ARGS...`, does the equival
 ```bash
 exec fuselage \
   --static=/run/fuselage/myapp:/proc/self/exe \
-  --run /run/fuselage/myapp/.venv/bin/python -m myapp \
-  -- ARGS...
+  --run /run/fuselage/myapp/.venv/bin/python \
+  -- -m myapp ARGS...
 ```
 
 ## Dependency: ELF preprocessing in fuselage
 
 For this to work, fuselage must recognise an ELF binary as a valid archive
-argument — detecting the ELF magic, scanning forward for squashfs magic bytes,
+argument — detecting the ELF magic, finding the start of the squashfs section,
 recording the byte offset, and treating the remainder identically to a
 standalone squashfs. In privileged mode this means passing `lo_offset` to the
 loop device; in unprivileged mode it means seeking to the offset before handing
@@ -62,12 +65,11 @@ underlying archive is still squashfs; the ELF is just a carrier.
 
 ## Stub behaviour
 
-The stub is compiled into `fuselage-pack` as a binary blob and appended to the
+The stub is compiled into `fuselage-pack` as a binary blob and prefixed to the
 squashfs at pack time. At runtime it:
 
 1. Resolves its own absolute path via `/proc/self/exe`
-2. Substitutes the resolved path for `@self` in the baked-in argument list
-3. `execvp`s `fuselage` with the substituted arguments, passing through `argv[1..]` from the user
+2. `execvp`s `fuselage` with the substituted arguments, passing through `argv[1..]` from the user
 
 If `fuselage` is not found on `PATH`, the stub exits with a clear error message.
 
@@ -82,10 +84,12 @@ fuselage --dynamic-empty=/run/fuselage/myapp -- bash -c '
 
 # 2. Pack
 fuselage-pack \
-  --static=/run/fuselage/myapp:@self \
   --output myapp \
-  myapp.sfs \
-  -- /run/fuselage/myapp/.venv/bin/python -m myapp
+  --archive myapp.sfs \
+  -- \
+  --static=/run/fuselage/myapp:/proc/self/exe \
+  --run /run/fuselage/myapp/.venv/bin/python \
+  -- -m myapp
 
 # 3. Distribute and run
 ./myapp --some-arg   # finds fuselage on PATH, mounts squashfs, runs Python
@@ -99,10 +103,3 @@ same as AppImage Type 2. The key differences are:
 - The stub invokes `fuselage` rather than mounting via FUSE, giving access to fuselage's setuid privilege model and fixed-path mounting
 - The fixed-path mounting (`/run/fuselage/NAME`) allows pre-built venvs with correct hardcoded paths, without FUSE being required on the target
 - Multiple archives can be composed (if future `fuselage-pack` variants support embedding more than one squashfs)
-
-## Implementation notes
-
-- `fuselage-pack` is likely a separate binary in the same Cargo workspace rather than a subcommand, keeping the runtime binary lean
-- The stub must be statically linked and architecture-specific; `fuselage-pack` ships pre-compiled stubs for each supported target (x86_64, aarch64)
-- The baked-in argument list can be stored as a null-terminated string in a dedicated ELF section in the stub, written by `fuselage-pack` before appending the squashfs
-- Depends on the ELF preprocessing feature being implemented in fuselage first
