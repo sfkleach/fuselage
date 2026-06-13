@@ -26,8 +26,13 @@ struct Args {
     output: PathBuf,
     fuselage_args: Vec<String>,
     /// Explicit build directory. When absent a temporary directory is created
-    /// under the system temp dir and removed after bundling completes.
+    /// under the system temp dir with a `_fuselage_bundle_<PID>` name.
     build_dir: Option<PathBuf>,
+    /// Allow --build-dir to already exist; the pre-existing directory is never
+    /// torn down (only directories created by this run are eligible for removal).
+    exist_ok: bool,
+    /// Suppress teardown of the build directory after bundling completes.
+    keep: bool,
 }
 
 /// Parse command-line arguments.
@@ -37,6 +42,8 @@ fn parse_args() -> Result<Args> {
     let mut archive: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
     let mut build_dir: Option<PathBuf> = None;
+    let mut exist_ok = false;
+    let mut keep = false;
     let mut fuselage_args: Vec<String> = Vec::new();
     let mut after_dashdash = false;
 
@@ -65,6 +72,10 @@ fn parse_args() -> Result<Args> {
             i += 1;
             let val = raw.get(i).context("--build-dir requires a value")?;
             build_dir = Some(PathBuf::from(val));
+        } else if arg == "--exist-ok" {
+            exist_ok = true;
+        } else if arg == "--keep" {
+            keep = true;
         } else {
             anyhow::bail!("unrecognised argument: {arg:?}");
         }
@@ -83,6 +94,8 @@ fn parse_args() -> Result<Args> {
         output,
         fuselage_args,
         build_dir,
+        exist_ok,
+        keep,
     })
 }
 
@@ -93,17 +106,29 @@ fn bundle(args: &Args) -> Result<()> {
         None => std::env::temp_dir().join(format!("_fuselage_bundle_{}", std::process::id())),
     };
 
-    std::fs::create_dir_all(&build_dir)
-        .with_context(|| format!("failed to create build dir {}", build_dir.display()))?;
+    let pre_existed = build_dir.exists();
+    if pre_existed && !args.exist_ok {
+        anyhow::bail!(
+            "build dir already exists: {} (use --exist-ok to allow)",
+            build_dir.display()
+        );
+    }
+    // Only create (and later remove) the directory if this run is responsible for it.
+    let we_created = !pre_existed;
+    if we_created {
+        std::fs::create_dir_all(&build_dir)
+            .with_context(|| format!("failed to create build dir {}", build_dir.display()))?;
+    }
 
     let result = bundle_in(&build_dir, &args.archive, &args.output, &args.fuselage_args);
 
-    // Always attempt cleanup; if bundling failed, preserve that error.
-    if let Err(e) = std::fs::remove_dir_all(&build_dir) {
-        eprintln!(
-            "warning: failed to remove build dir {}: {e}",
-            build_dir.display()
-        );
+    if we_created && !args.keep {
+        if let Err(e) = std::fs::remove_dir_all(&build_dir) {
+            eprintln!(
+                "warning: failed to remove build dir {}: {e}",
+                build_dir.display()
+            );
+        }
     }
 
     result
