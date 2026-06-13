@@ -43,6 +43,7 @@ security audit. No failures, no warnings promoted to errors.
 
 - [ ] README accurately reflects the current behaviour and options.
 - [ ] Any new features are documented (options table, examples, or linked doc).
+- [ ] Version numbers embedded in the README (e.g. manual download URLs) match the new version.
 - [ ] No broken links in the README (check relative links resolve correctly).
 
 ## Release workflow
