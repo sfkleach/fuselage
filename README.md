@@ -25,13 +25,19 @@ fuselage [OPTIONS...] --run PATH [ARG...]
 | Option | Description |
 |---|---|
 | `--dynamic=[NAME:]FILE` | Extract `FILE` into a fresh, mutable directory at `$FUSELAGE_DYNAMIC/NAME/` |
-| `--static=[NAME:]FILE` | Mount or extract `FILE` into a cached, read-only directory at `$FUSELAGE_STATIC/NAME/` |
+| `--dynamic-empty=NAME` | Create an empty writable directory at `NAME` (no archive needed) |
+| `--static=[NAME:]FILE` | Mount or extract `FILE` into a read-only directory at `$FUSELAGE_STATIC/NAME/` |
 | `--cache-static` | Convert zip `--static` archives to squashfs for faster subsequent runs (requires `mksquashfs`) |
-| `--run PATH [ARG...]` | Find `PATH` in extracted archives and execute it |
+| `--run PATH` | Find `PATH` in extracted archives and execute it |
 
-`FILE` is a zip file, a squashfs image (`.sfs`), or a text file containing base64-encoded zip or squashfs data.
+`FILE` is a zip file, a squashfs image (`.sfs`), an ELF binary with an embedded squashfs image, or a
+text file containing base64-encoded zip or squashfs data.
 `NAME` defaults to the filename stem (e.g. `my-data.zip` → `my-data`, `my-data.sfs` → `my-data`).
 All archive names must be unique; use `NAME:` to disambiguate.
+
+`NAME` may also be an absolute path of the form `/run/fuselage/NAME` (one component under that prefix),
+causing the archive to be mounted at that fixed location. This allows pre-built environments with
+hardcoded paths (e.g. Python venvs) to work correctly. Fixed-path mounts require setuid-root mode.
 
 Squashfs images are the most efficient format for `--static` archives: in setuid-root mode they are
 loop-mounted read-only directly from the file, with no extraction to disk. Create them with `mksquashfs`
@@ -58,7 +64,33 @@ fuselage --static=sdk:toolchain.zip --dynamic=src:source.zip \
 
 # Run an executable from inside an archive
 fuselage --dynamic=app:my-app.zip --run bin/server --port 8080
+
+# Build a Python venv at a fixed path, then capture it as a squashfs
+fuselage --dynamic-empty=/run/fuselage/myapp -- bash -c '
+  uv venv /run/fuselage/myapp/.venv && uv pip install -r requirements.txt
+  mksquashfs /run/fuselage/myapp myapp.sfs
+'
+
+# Run the captured venv (loop-mounted at the same fixed path)
+fuselage --static=/run/fuselage/myapp:myapp.sfs -- \
+  /run/fuselage/myapp/.venv/bin/python -m myapp
 ```
+
+## fuselage-bundle
+
+`fuselage-bundle` packages a squashfs archive and a baked-in fuselage invocation
+into a single self-executing ELF binary that can be distributed and run directly.
+
+```bash
+fuselage-bundle --archive=myapp.sfs --output=myapp \
+  -- --static=/run/fuselage/myapp:/proc/self/exe \
+     --run /run/fuselage/myapp/.venv/bin/python \
+     -- -m myapp
+```
+
+The resulting `myapp` binary locates `fuselage` on `PATH`, mounts its own embedded
+squashfs at `/run/fuselage/myapp`, and runs the Python module. Pass `--keep` to
+retain the intermediate build directory for inspection.
 
 ## Privilege model
 
@@ -139,10 +171,10 @@ and install setuid-root as shown below.
 # Download to (say) ~/.local/bin/fuselage for your architecture. This example
 # assumes 64-bit Intel and moves the binary to ~/.local/bin, which is typically
 # on your $PATH. IMPORTANT: replace the version number with the current release.
-wget https://github.com/sfkleach/fuselage/releases/download/v0.2.0/fuselage-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
-tar zxf fuselage-v0.2.0-x86_64-unknown-linux-gnu.tar.gz fuselage
+wget https://github.com/sfkleach/fuselage/releases/download/v0.3.0/fuselage-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
+tar zxf fuselage-v0.3.0-x86_64-unknown-linux-gnu.tar.gz fuselage
 mv -i fuselage ~/.local/bin
-rm -f fuselage-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
+rm -f fuselage-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
 
 # setuid-root for normal setup (optional).
 sudo chown root:root ~/.local/bin/fuselage
