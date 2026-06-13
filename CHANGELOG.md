@@ -2,9 +2,29 @@
 
 Following the style in https://keepachangelog.com/en/1.0.0/
 
-## Unreleased
+## v0.3.0, Bundling and fixed-path mounts 2026-06-13
 
-To be completed ...
+### Added
+
+- Fixed mount paths: `--static` and `--dynamic` now accept an absolute path
+  of the form `/run/fuselage/NAME` as the mount name, causing the archive to
+  be mounted at that fixed location inside the namespace rather than under
+  `$FUSELAGE_STATIC/` or `$FUSELAGE_DYNAMIC/`. Requires setuid-root mode.
+- `--dynamic-empty=/run/fuselage/NAME`: creates an empty writable directory
+  at a fixed path without extracting any archive. Intended for build workflows
+  where the directory is populated inside the namespace and then captured as a
+  squashfs for distribution.
+- ELF+squashfs archive format: `--static` and `--dynamic` now accept a
+  self-executing ELF binary with an embedded squashfs image (the same layout
+  as AppImage Type 2). The squashfs offset is derived from the ELF's full
+  on-disk extent, so non-stripped binaries (with trailing section headers and
+  symbol tables) are handled correctly.
+- `fuselage-bundle`: new companion binary that packages a squashfs archive and
+  a baked-in fuselage invocation into a single self-executing ELF binary. The
+  resulting file can be distributed and run directly; it locates `fuselage` on
+  `PATH` and mounts its own embedded squashfs at the fixed path. Supports
+  `--build-dir`, `--exist-ok`, and `--keep` for control over the intermediate
+  build directory.
 
 ## v0.2.5, Revised publish process
 
