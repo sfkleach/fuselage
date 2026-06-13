@@ -355,6 +355,42 @@ fi
 
 echo ""
 
+# ── fuselage-bundle round-trip ─────────────────────────────────────────────────
+# Pack a squashfs into a self-executing ELF, then verify both that fuselage can
+# mount the embedded squashfs and that the bundle runs itself end to end.
+
+echo "--- fuselage-bundle ---"
+
+BUNDLE="$(dirname "$FUSELAGE")/fuselage-bundle"
+
+if command -v mksquashfs >/dev/null 2>&1 && command -v gcc >/dev/null 2>&1 && [[ -x "$BUNDLE" ]]; then
+    mkdir -p "$WORKDIR/bundleroot"
+    printf '#!/bin/sh\necho "hello from bundled squashfs"\n' > "$WORKDIR/bundleroot/run.sh"
+    chmod +x "$WORKDIR/bundleroot/run.sh"
+    mksquashfs "$WORKDIR/bundleroot" "$WORKDIR/bundle.sfs" -comp zstd -noappend -quiet
+
+    # Pack: the baked --static points at /proc/self/exe so the bundle mounts its
+    # own embedded squashfs; the stub substitutes the resolved path at runtime.
+    "$BUNDLE" --archive="$WORKDIR/bundle.sfs" --output="$WORKDIR/selfexec" \
+        -- --static=payload:/proc/self/exe --run payload/run.sh >/dev/null
+
+    # The bundle must be a recognisable ELF that fuselage can mount directly,
+    # proving the embedded-squashfs offset agrees between packer and detector.
+    check_output "bundle: fuselage mounts embedded squashfs" "hello from bundled squashfs" \
+        "$FUSELAGE" --static="payload:$WORKDIR/selfexec" --run payload/run.sh
+
+    # Run the self-executing binary directly. The stub execs "fuselage" via PATH,
+    # so force the directory of the fuselage-under-test to the front of PATH —
+    # otherwise an installed fuselage could be exercised instead of this build.
+    FUSELAGE_DIR="$(cd "$(dirname "$FUSELAGE")" && pwd)"
+    check_output "bundle: self-executing binary runs" "hello from bundled squashfs" \
+        env "PATH=$FUSELAGE_DIR:$PATH" "$WORKDIR/selfexec"
+else
+    echo "  SKIP: fuselage-bundle (requires mksquashfs, gcc, and a built fuselage-bundle)"
+fi
+
+echo ""
+
 # ── Setuid-specific tests ─────────────────────────────────────────────────────
 
 if [[ "$MODE" == "setuid" ]]; then
