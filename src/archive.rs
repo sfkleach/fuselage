@@ -274,8 +274,14 @@ pub fn detect_format(path: &Path) -> Result<ArchiveFormat> {
 }
 
 /// Given a file whose first 4 bytes are ELF magic, locate the squashfs image
-/// embedded immediately after the last PT_LOAD segment (rounded up to a 4096-byte
-/// boundary) and return `ArchiveFormat::ElfSquashfs(offset)`.
+/// embedded immediately after the ELF's own on-disk data (rounded up to a
+/// 4096-byte boundary) and return `ArchiveFormat::ElfSquashfs(offset)`.
+///
+/// The ELF's on-disk extent is the maximum of the section-header-table end, the
+/// program-header-table end, and the highest PT_LOAD segment end. This matches
+/// how fuselage-bundle appends the squashfs (after the whole compiled stub,
+/// padded to a page boundary): using only the last PT_LOAD end would miss the
+/// trailing section headers and symbol tables of a normal, non-stripped binary.
 ///
 /// The offset is derived from ELF structure rather than a magic-byte scan, so
 /// coincidental squashfs magic inside the ELF body cannot produce a false positive.
@@ -326,8 +332,8 @@ fn detect_elf_squashfs(mut f: fs::File, path: &Path) -> Result<ArchiveFormat> {
     Ok(ArchiveFormat::ElfSquashfs(squashfs_offset))
 }
 
-/// Read `count` program header entries for a 32-bit ELF and return the byte offset
-/// immediately after the last PT_LOAD segment, rounded up to a 4096-byte boundary.
+/// Compute the squashfs offset for a 32-bit ELF: the 4096-aligned end of the
+/// ELF's on-disk data (see `detect_elf_squashfs`).
 fn elf_squashfs_offset_32<B: byteorder::ByteOrder>(f: &mut fs::File, path: &Path) -> Result<u64> {
     use byteorder::ReadBytesExt;
 
@@ -340,17 +346,28 @@ fn elf_squashfs_offset_32<B: byteorder::ByteOrder>(f: &mut fs::File, path: &Path
     let _e_version = f.read_u32::<B>()?;
     let _e_entry = f.read_u32::<B>()?;
     let e_phoff = f.read_u32::<B>()? as u64;
-    let _e_shoff = f.read_u32::<B>()?;
+    let e_shoff = f.read_u32::<B>()? as u64;
     let _e_flags = f.read_u32::<B>()?;
     let _e_ehsize = f.read_u16::<B>()?;
     let e_phentsize = f.read_u16::<B>()? as u64;
     let e_phnum = f.read_u16::<B>()? as u64;
+    let e_shentsize = f.read_u16::<B>()? as u64;
+    let e_shnum = f.read_u16::<B>()? as u64;
 
-    highest_pt_load_end_32::<B>(f, path, e_phoff, e_phentsize, e_phnum)
+    let load_end = highest_pt_load_end_32::<B>(f, path, e_phoff, e_phentsize, e_phnum)?;
+    Ok(elf_image_offset(
+        load_end,
+        e_phoff,
+        e_phentsize,
+        e_phnum,
+        e_shoff,
+        e_shentsize,
+        e_shnum,
+    ))
 }
 
-/// Read `count` program header entries for a 64-bit ELF and return the byte offset
-/// immediately after the last PT_LOAD segment, rounded up to a 4096-byte boundary.
+/// Compute the squashfs offset for a 64-bit ELF: the 4096-aligned end of the
+/// ELF's on-disk data (see `detect_elf_squashfs`).
 fn elf_squashfs_offset_64<B: byteorder::ByteOrder>(f: &mut fs::File, path: &Path) -> Result<u64> {
     use byteorder::ReadBytesExt;
 
@@ -363,16 +380,48 @@ fn elf_squashfs_offset_64<B: byteorder::ByteOrder>(f: &mut fs::File, path: &Path
     let _e_version = f.read_u32::<B>()?;
     let _e_entry = f.read_u64::<B>()?;
     let e_phoff = f.read_u64::<B>()?;
-    let _e_shoff = f.read_u64::<B>()?;
+    let e_shoff = f.read_u64::<B>()?;
     let _e_flags = f.read_u32::<B>()?;
     let _e_ehsize = f.read_u16::<B>()?;
     let e_phentsize = f.read_u16::<B>()? as u64;
     let e_phnum = f.read_u16::<B>()? as u64;
+    let e_shentsize = f.read_u16::<B>()? as u64;
+    let e_shnum = f.read_u16::<B>()? as u64;
 
-    highest_pt_load_end_64::<B>(f, path, e_phoff, e_phentsize, e_phnum)
+    let load_end = highest_pt_load_end_64::<B>(f, path, e_phoff, e_phentsize, e_phnum)?;
+    Ok(elf_image_offset(
+        load_end,
+        e_phoff,
+        e_phentsize,
+        e_phnum,
+        e_shoff,
+        e_shentsize,
+        e_shnum,
+    ))
 }
 
-/// Scan 32-bit program headers and return the 4096-aligned end of the last PT_LOAD segment.
+/// Combine the program- and section-header table extents with the highest
+/// PT_LOAD end to find the ELF's on-disk size, then round up to a 4096-byte
+/// boundary. Saturating arithmetic is used because the header fields are
+/// untrusted input: a corrupt or hostile ELF could otherwise overflow, and the
+/// squashfs magic check at the resulting offset rejects any bogus value cleanly.
+#[allow(clippy::too_many_arguments)]
+fn elf_image_offset(
+    load_end: u64,
+    e_phoff: u64,
+    e_phentsize: u64,
+    e_phnum: u64,
+    e_shoff: u64,
+    e_shentsize: u64,
+    e_shnum: u64,
+) -> u64 {
+    let pht_end = e_phoff.saturating_add(e_phnum.saturating_mul(e_phentsize));
+    let sht_end = e_shoff.saturating_add(e_shnum.saturating_mul(e_shentsize));
+    let image_end = load_end.max(pht_end).max(sht_end);
+    align_up(image_end, 4096)
+}
+
+/// Scan 32-bit program headers and return the (unaligned) end of the last PT_LOAD segment.
 fn highest_pt_load_end_32<B: byteorder::ByteOrder>(
     f: &mut fs::File,
     path: &Path,
@@ -404,7 +453,7 @@ fn highest_pt_load_end_32<B: byteorder::ByteOrder>(
         let p_filesz = f.read_u32::<B>()? as u64;
 
         if p_type == PT_LOAD {
-            let end = p_offset + p_filesz;
+            let end = p_offset.saturating_add(p_filesz);
             if end > highest_end {
                 highest_end = end;
             }
@@ -417,10 +466,10 @@ fn highest_pt_load_end_32<B: byteorder::ByteOrder>(
         path.display()
     );
 
-    Ok(align_up(highest_end, 4096))
+    Ok(highest_end)
 }
 
-/// Scan 64-bit program headers and return the 4096-aligned end of the last PT_LOAD segment.
+/// Scan 64-bit program headers and return the (unaligned) end of the last PT_LOAD segment.
 fn highest_pt_load_end_64<B: byteorder::ByteOrder>(
     f: &mut fs::File,
     path: &Path,
@@ -453,7 +502,7 @@ fn highest_pt_load_end_64<B: byteorder::ByteOrder>(
         let p_filesz = f.read_u64::<B>()?;
 
         if p_type == PT_LOAD {
-            let end = p_offset + p_filesz;
+            let end = p_offset.saturating_add(p_filesz);
             if end > highest_end {
                 highest_end = end;
             }
@@ -466,7 +515,7 @@ fn highest_pt_load_end_64<B: byteorder::ByteOrder>(
         path.display()
     );
 
-    Ok(align_up(highest_end, 4096))
+    Ok(highest_end)
 }
 
 /// Round `value` up to the nearest multiple of `align` (which must be a power of two).
@@ -883,6 +932,70 @@ mod tests {
         let f = write_tmp(&bytes);
         match detect_format(f.path()).unwrap() {
             ArchiveFormat::ElfSquashfs(offset) => assert_eq!(offset, 4096),
+            other => panic!("expected ElfSquashfs, got {other:?}"),
+        }
+    }
+
+    /// Build a 64-bit little-endian ELF whose section-header table lives *after*
+    /// the last PT_LOAD segment, with the squashfs on the page after that table.
+    ///
+    /// This mirrors a real, non-stripped compiler output: the loadable segments
+    /// end early but trailing section headers / symbol tables extend the file.
+    /// The squashfs offset must therefore be driven by the section-header-table
+    /// end, not the last PT_LOAD end — the case that the simpler fixture misses.
+    ///
+    /// Layout: PT_LOAD ends at 120; section-header table at offset 4097 with two
+    /// 64-byte entries (end 4225); squashfs magic on the next page at 8192.
+    fn make_elf64_le_with_trailing_sht(sfs_magic: &[u8; 4]) -> Vec<u8> {
+        let mut buf = vec![0u8; 8192 + 8];
+
+        buf[0..4].copy_from_slice(b"\x7fELF");
+        buf[4] = 2; // ELFCLASS64
+        buf[5] = 1; // ELFDATA2LSB
+        buf[6] = 1; // EV_CURRENT
+
+        buf[16..18].copy_from_slice(&2u16.to_le_bytes()); // ET_EXEC
+        buf[18..20].copy_from_slice(&0x3eu16.to_le_bytes()); // EM_X86_64
+        buf[20..24].copy_from_slice(&1u32.to_le_bytes()); // EV_CURRENT
+
+        buf[24..32].copy_from_slice(&0u64.to_le_bytes()); // e_entry
+        buf[32..40].copy_from_slice(&64u64.to_le_bytes()); // e_phoff: right after header
+        buf[40..48].copy_from_slice(&4097u64.to_le_bytes()); // e_shoff: past the last PT_LOAD
+
+        buf[48..52].copy_from_slice(&0u32.to_le_bytes()); // e_flags
+        buf[52..54].copy_from_slice(&64u16.to_le_bytes()); // e_ehsize
+        buf[54..56].copy_from_slice(&56u16.to_le_bytes()); // e_phentsize
+        buf[56..58].copy_from_slice(&1u16.to_le_bytes()); // e_phnum
+        buf[58..60].copy_from_slice(&64u16.to_le_bytes()); // e_shentsize
+        buf[60..62].copy_from_slice(&2u16.to_le_bytes()); // e_shnum: sht_end = 4097 + 2*64 = 4225
+        buf[62..64].copy_from_slice(&0u16.to_le_bytes()); // e_shstrndx
+
+        // ELF64 Phdr at offset 64: one PT_LOAD covering bytes 0..120.
+        buf[64..68].copy_from_slice(&1u32.to_le_bytes()); // PT_LOAD
+        buf[68..72].copy_from_slice(&5u32.to_le_bytes()); // PF_R|PF_X
+        buf[72..80].copy_from_slice(&0u64.to_le_bytes()); // p_offset
+        buf[80..88].copy_from_slice(&0u64.to_le_bytes()); // p_vaddr
+        buf[88..96].copy_from_slice(&0u64.to_le_bytes()); // p_paddr
+        buf[96..104].copy_from_slice(&120u64.to_le_bytes()); // p_filesz
+        buf[104..112].copy_from_slice(&120u64.to_le_bytes()); // p_memsz
+        buf[112..120].copy_from_slice(&4096u64.to_le_bytes()); // p_align
+
+        // Squashfs magic on the page after the section-header table (offset 8192).
+        buf[8192..8196].copy_from_slice(sfs_magic);
+
+        buf
+    }
+
+    #[test]
+    fn detect_format_elf_offset_follows_section_header_table() {
+        // The squashfs sits past the section-header table, on a different page
+        // than the last PT_LOAD end (4096). The offset must be 8192, proving the
+        // detector accounts for trailing section data rather than stopping at the
+        // last loadable segment.
+        let bytes = make_elf64_le_with_trailing_sht(b"hsqs");
+        let f = write_tmp(&bytes);
+        match detect_format(f.path()).unwrap() {
+            ArchiveFormat::ElfSquashfs(offset) => assert_eq!(offset, 8192),
             other => panic!("expected ElfSquashfs, got {other:?}"),
         }
     }
