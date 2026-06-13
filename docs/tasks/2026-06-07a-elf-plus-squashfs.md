@@ -35,19 +35,24 @@ with no compensating advantage.
 
 ### Detection
 
-Extend `detect_format` in `archive.rs`.  AppImage Type 2 specifically places the
-squashfs immediately after the last loadable segment — you can compute that from
-the program header table (PT_LOAD segments), taking the highest p_offset +
-p_filesz and rounding up to the squashfs block alignment (4096 bytes). 
+Extend `detect_format` in `archive.rs`. The squashfs offset is computed as the
+4096-byte-aligned end of the ELF's complete on-disk data. The ELF's on-disk
+extent is the maximum of:
 
-N.B. If the raw end is already aligned there is no need to round up.
+- The end of the last PT_LOAD segment (`p_offset + p_filesz`).
+- The end of the program-header table (`e_phoff + e_phnum × e_phentsize`).
+- The end of the section-header table (`e_shoff + e_shnum × e_shentsize`).
 
-If no squashfs magic is found immediately after the ELF, return an error
-(unrecognised format).
+AppImage Type 2 uses only the PT_LOAD end, which works for stripped binaries.
+Our implementation uses the full extent so that non-stripped binaries — which
+carry trailing section headers, symbol tables, and debug data after the last
+loadable segment — are also handled correctly. The squashfs magic bytes are
+verified at the computed offset; if they are not found, an error is returned
+(unrecognised format). Arithmetic on the untrusted ELF header fields is
+saturating to prevent overflow.
 
-A new internal type (not a public `ArchiveFormat` variant) can carry the offset
-alongside the squashfs format indicator, keeping the existing dispatch logic
-largely unchanged.
+The offset is carried in the `ArchiveFormat::ElfSquashfs(u64)` variant, keeping
+the existing dispatch logic largely unchanged.
 
 ### Privileged mode (loop mount)
 
