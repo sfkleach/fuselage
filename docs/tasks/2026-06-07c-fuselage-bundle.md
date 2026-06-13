@@ -1,4 +1,4 @@
-# Task: Implement fuselage-pack — bundle a squashfs and fuselage command into a single self-executing ELF binary
+# Task: Implement fuselage-bundle — bundle a squashfs and fuselage command into a single self-executing ELF binary
 
 ## Overview
 
@@ -6,7 +6,7 @@ This task implements Issue https://github.com/sfkleach/fuselage/issues/8
 
 ## Overview
 
-`fuselage-pack` is a companion tool that takes a squashfs archive and a fuselage
+`fuselage-bundle` is a companion tool that takes a squashfs archive and a fuselage
 invocation and produces a single self-executing ELF binary. The resulting file
 can be distributed and run directly — it locates `fuselage` on `PATH` and
 invokes it with the embedded squashfs and baked-in arguments.
@@ -26,13 +26,13 @@ AppImage Type 2.
 ## Invocation
 
 ```
-fuselage-pack --archive=SQUASHFS --output BINARY_FILE -- [FUSELAGE_OPTIONS...] 
+fuselage-bundle --archive=SQUASHFS --output BINARY_FILE -- [FUSELAGE_OPTIONS...] 
 ```
 
 Example:
 
 ```bash
-fuselage-pack \
+fuselage-bundle \
   --archive=myapp.sfs \
   --output=myapp
   --\
@@ -65,7 +65,7 @@ underlying archive is still squashfs; the ELF is just a carrier.
 
 ## Stub behaviour
 
-The stub is compiled into `fuselage-pack` as a binary blob and prefixed to the
+The stub is compiled into `fuselage-bundle` as a binary blob and prefixed to the
 squashfs at pack time. At runtime it:
 
 1. Resolves its own absolute path via `/proc/self/exe`
@@ -83,7 +83,7 @@ fuselage --dynamic-empty=/run/fuselage/myapp -- bash -c '
 '
 
 # 2. Pack
-fuselage-pack \
+fuselage-bundle \
   --output myapp \
   --archive myapp.sfs \
   -- \
@@ -102,4 +102,4 @@ same as AppImage Type 2. The key differences are:
 
 - The stub invokes `fuselage` rather than mounting via FUSE, giving access to fuselage's setuid privilege model and fixed-path mounting
 - The fixed-path mounting (`/run/fuselage/NAME`) allows pre-built venvs with correct hardcoded paths, without FUSE being required on the target
-- Multiple archives can be composed (if future `fuselage-pack` variants support embedding more than one squashfs)
+- Multiple archives can be composed (if future `fuselage-bundle` variants support embedding more than one squashfs)

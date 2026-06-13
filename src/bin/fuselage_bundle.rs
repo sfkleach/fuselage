@@ -3,11 +3,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// fuselage-pack: bundle a squashfs archive and a fuselage invocation into a
+/// fuselage-bundle: bundle a squashfs archive and a fuselage invocation into a
 /// self-executing ELF binary.
 ///
 /// Usage:
-///   fuselage-pack --archive=SQUASHFS --output=BINARY -- [FUSELAGE_ARGS...]
+///   fuselage-bundle --archive=SQUASHFS --output=BINARY -- [FUSELAGE_ARGS...]
 ///
 /// Everything after -- is stored verbatim as the baked-in fuselage argument
 /// list. The resulting binary, when executed as `BINARY ARGS...`, does:
@@ -87,7 +87,7 @@ fn pack(archive: &Path, output: &Path, fuselage_args: &[String]) -> Result<()> {
     set_executable(output)?;
 
     println!(
-        "fuselage-pack: wrote {} ({} bytes)",
+        "fuselage-bundle: wrote {} ({} bytes)",
         output.display(),
         std::fs::metadata(output)?.len()
     );
@@ -105,7 +105,7 @@ fn generate_stub_c(dest: &Path, fuselage_args: &[String]) -> Result<()> {
         .map(|a| format!("    {},\n", c_string_literal(a)))
         .collect();
 
-    let source = template.replace("    FUSELAGE_PACK_ARGS\n", &args_literal);
+    let source = template.replace("    FUSELAGE_BUNDLE_ARGS\n", &args_literal);
 
     std::fs::write(dest, source).with_context(|| format!("failed to write {}", dest.display()))?;
 

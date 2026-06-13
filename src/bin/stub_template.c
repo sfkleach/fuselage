@@ -4,11 +4,11 @@
 #include <string.h>
 #include <unistd.h>
 
-// Baked-in fuselage argument list, substituted by fuselage-pack at pack time.
-// FUSELAGE_PACK_ARGS is replaced with a C array body such as:
+// Baked-in fuselage argument list, substituted by fuselage-bundle at pack time.
+// FUSELAGE_BUNDLE_ARGS is replaced with a C array body such as:
 //   "--static=/run/fuselage/myapp:/proc/self/exe", "--run", "python", "--", "-m", "myapp"
 static const char *baked_args[] = {
-    FUSELAGE_PACK_ARGS
+    FUSELAGE_BUNDLE_ARGS
     NULL
 };
 

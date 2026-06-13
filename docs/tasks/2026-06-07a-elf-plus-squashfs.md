@@ -14,7 +14,7 @@ is still squashfs. The ELF is a transparent carrier.
 
 ### Motivation
 
-This is the prerequisite for `fuselage-pack` (issue #8), which produces
+This is the prerequisite for `fuselage-bundle` (issue #8), which produces
 self-executing ELF binaries with an embedded squashfs. It also provides
 incidental interoperability with existing AppImage files, which use the same
 physical layout.
