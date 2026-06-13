@@ -1,16 +1,18 @@
-# fuselage -- ephemeral virtual filesystems for processes
+# fuselage — ephemeral virtual filesystems for processes
 
 ## Overview
 
-`fuselage` runs a command with ephemeral, namespace-private filesystems
-derived from zip archives. It requires no containers, no daemons, and no
-manual cleanup. Archives are unpacked -- never mounted as zip -- so the
-command sees a normal directory tree.
+`fuselage` runs a command with ephemeral, namespace-private filesystems derived
+from zip or squashfs archives. It requires no containers, no daemons, and no
+manual cleanup.
 
 There is no isolation: the process keeps its normal environment, PID space,
-network, and UID. The only thing `fuselage` adds is a private mount
-namespace so that (a) the ephemeral mounts are invisible to other processes
-and (b) they vanish automatically when the command exits.
+network, and UID. The only thing `fuselage` adds is a private mount namespace
+so that (a) the ephemeral mounts are invisible to other processes and (b) they
+vanish automatically when the command exits.
+
+See also `fuselage-bundle`, a companion tool that packages a squashfs archive
+and a fuselage invocation into a single self-executing ELF binary.
 
 ## Usage
 
@@ -19,8 +21,8 @@ fuselage [OPTIONS...] [--] COMMAND [ARG...]
 fuselage [OPTIONS...] --run PATH [ARG...]
 ```
 
-All options are optional. With no `--static` or `--dynamic` flags,
-fuselage simply provides an ephemeral tmpdir at `$FUSELAGE_TMPDIR`.
+All options are optional. With no `--static`, `--dynamic`, or `--dynamic-empty`
+flags, fuselage simply provides an ephemeral tmpdir at `$FUSELAGE_TMPDIR`.
 
 ### `--dynamic=[NAME:]FILE`
 
@@ -28,52 +30,103 @@ Extract `FILE` into a fresh, mutable directory under `$FUSELAGE_DYNAMIC/`.
 The extraction is private to this invocation and is discarded when the
 command exits.
 
-`FILE` must be either:
+`FILE` must be one of:
 
-- a zip file (detected by magic bytes `PK\x03\x04`), or
-- a text file containing base64-encoded zip data.
+- A zip file (magic bytes `PK\x03\x04`).
+- A squashfs image (magic bytes `hsqs` or `sqsh`).
+- An ELF binary with an embedded squashfs image (magic bytes `\x7fELF`).
+- A text file containing base64-encoded zip or squashfs data (with optional
+  leading `#` comment lines).
 
-`NAME` is optional. If omitted, it is derived from the filename by
-stripping the extension (e.g. `my-data.zip` -> `my-data`). The archive
-is extracted into `$FUSELAGE_DYNAMIC/NAME/`.
+`NAME` is optional. If omitted, it is derived from the filename by stripping
+the extension (e.g. `my-data.zip` → `my-data`). The archive is extracted into
+`$FUSELAGE_DYNAMIC/NAME/`.
+
+Alternatively, `NAME` may be an absolute path of the form `/run/fuselage/NAME`
+(a single path component under that prefix). In this case the archive is
+extracted into that fixed path rather than under `$FUSELAGE_DYNAMIC/`. Fixed
+paths require setuid-root mode; see [Privilege model](#privilege-model).
 
 ### `--static=[NAME:]FILE`
 
 Like `--dynamic`, but:
 
-- The extraction is cached persistently under `~/.fuselage/cache/`
-  using a content hash (SHA-256 prefix) of `FILE`. Subsequent runs
-  with the same file skip extraction entirely.
-- The directory is mounted **read-only** inside the namespace.
-- The archive appears at `$FUSELAGE_STATIC/NAME/`.
+- Squashfs images are loop-mounted read-only directly from the file in
+  setuid-root mode (no extraction). In unprivileged mode they are extracted
+  to a directory and bind-mounted read-only.
+- ELF+squashfs files are treated like squashfs, with the kernel receiving the
+  byte offset of the embedded squashfs image.
+- Zip archives are extracted and optionally cached; see `--cache-static`.
+- The directory appears at `$FUSELAGE_STATIC/NAME/`.
 
-### `--run PATH [ARG...]`
+As with `--dynamic`, `NAME` may be an absolute path `/run/fuselage/NAME` for
+fixed-path mounting; this requires setuid-root mode.
 
-Search all extracted archives (both static and dynamic) for `PATH`.
-If found in exactly one archive, execute it with the remaining
-arguments. Errors if:
+### `--dynamic-empty=NAME`
+
+Create an empty, writable directory at `NAME` without extracting any archive.
+`NAME` may be a relative name (directory created under `$FUSELAGE_DYNAMIC/`) or
+an absolute path `/run/fuselage/NAME`. This is the build-time counterpart to
+`--static=/run/fuselage/NAME:FILE`: use `--dynamic-empty` to create the fixed
+path during a build invocation, populate it, then capture the result as a
+squashfs for distribution.
+
+### `--cache-static`
+
+Convert zip `--static` archives to squashfs images and cache them under
+`~/.fuselage/cache/`, keyed by SHA-256 content hash. Subsequent runs with the
+same file skip conversion and mount the cached squashfs directly. Disabled by
+default so that confidential archives leave no traces on disk.
+
+### `--run PATH`
+
+Search all mounted archives (both static and dynamic) for `PATH`. If found in
+exactly one archive, execute it with any arguments that follow `--`. Errors if:
 
 - `PATH` is not found in any archive.
-- `PATH` is found in multiple archives (ambiguous).
+- `PATH` is found in more than one archive (ambiguous).
 - The found file is not executable.
 
-`--run` is an alternative to `-- COMMAND`; use one or the other.
-Requires at least one `--static` or `--dynamic` archive.
+`--run` is an alternative to `-- COMMAND`; use one or the other. Requires at
+least one `--static`, `--dynamic`, or `--dynamic-empty` archive.
 
 ### Archive name uniqueness
 
-All archive names must be unique across `--static` and `--dynamic`.
-If two archives would have the same derived name (e.g. both called
-`foo.zip`), use the `NAME:` prefix to disambiguate:
+All relative archive names must be unique across `--static`, `--dynamic`, and
+`--dynamic-empty` within a single invocation. If two archives would have the
+same derived name, use the `NAME:` prefix to disambiguate:
 
 ```
 fuselage --static=cached:foo.zip --dynamic=fresh:foo.zip -- ...
 ```
 
+Fixed absolute paths (`/run/fuselage/NAME`) must also be unique within an
+invocation.
+
 ### `COMMAND [ARG...]`
 
-The command to execute. It runs as the calling user with full access
-to the normal filesystem, plus the additional mounts.
+The command to execute. It runs as the calling user with full access to the
+normal filesystem, plus the additional mounts.
+
+## Archive formats
+
+`--static` and `--dynamic` accept the following file types, detected by magic
+bytes at the start of the file:
+
+| Format | Detection |
+|---|---|
+| Zip | Magic bytes `PK\x03\x04` at offset 0 |
+| Squashfs | Magic bytes `hsqs` (little-endian) or `sqsh` (big-endian) at offset 0 |
+| ELF+squashfs | ELF magic `\x7fELF` at offset 0; squashfs at a computed page-aligned offset |
+| Base64 | Any file whose content is valid base64 text (with optional `#` comment lines) |
+
+For ELF+squashfs the squashfs offset is the 4096-byte-aligned end of the ELF's
+complete on-disk data: the maximum of the end of the section-header table, the
+program-header table, and the last PT_LOAD segment. The squashfs magic bytes are
+verified at the computed offset; an ELF without an embedded squashfs is rejected.
+
+This layout is the same as AppImage Type 2, so existing AppImage files work as
+archive inputs.
 
 ## Directory layout
 
@@ -81,125 +134,109 @@ to the normal filesystem, plus the additional mounts.
 ~/.fuselage/
   procdirs/<pid>/              per-process ephemeral root (tmpfs)
     tmp/                       scratch space ($FUSELAGE_TMPDIR)
-    dynamic/NAME/              --dynamic extractions
-    static/NAME/               --static read-only bind-mounts
-  cache/<sha256-prefix>/       --static persistent cache
+    dynamic/NAME/              --dynamic extractions (relative names)
+    static/NAME/               --static read-only bind-mounts (relative names)
+  cache/<sha256-prefix>/       --cache-static persistent squashfs cache
+
+/run/fuselage/
+  NAME/                        fixed-path mounts (absolute-name archives)
 ```
 
-- `procdirs/<pid>/` is overlaid with a tmpfs inside the mount
-  namespace. Other processes see it as an empty directory. It is
-  removed on exit.
-
-- `cache/<sha256-prefix>/` lives on the real filesystem and persists
-  across invocations. A sentinel file at `cache/<sha256-prefix>.complete`
-  marks a finished extraction.
+- `procdirs/<pid>/` is overlaid with a tmpfs inside the mount namespace. Other
+  processes see it as an empty directory. It is removed on exit.
+- `cache/<sha256-prefix>/` lives on the real filesystem and persists across
+  invocations. A sentinel file marks a finished extraction.
+- `/run/fuselage/` is created during the privilege window if it does not exist.
+  Inside the private mount namespace, `/run/fuselage/NAME` is visible only to
+  the fuselage invocation that created it; concurrent invocations do not
+  interfere.
 
 ## Environment variables
 
 | Variable | Set when | Value |
 |---|---|---|
 | `FUSELAGE_TMPDIR` | Always | `~/.fuselage/procdirs/<pid>/tmp` |
-| `FUSELAGE_DYNAMIC` | Any `--dynamic` | `~/.fuselage/procdirs/<pid>/dynamic` |
-| `FUSELAGE_STATIC` | Any `--static` | `~/.fuselage/procdirs/<pid>/static` |
+| `FUSELAGE_DYNAMIC` | Any relative-name `--dynamic` | `~/.fuselage/procdirs/<pid>/dynamic` |
+| `FUSELAGE_STATIC` | Any relative-name `--static` | `~/.fuselage/procdirs/<pid>/static` |
 
-These are inherited by child processes.
-
-Access individual archives by name:
-`$FUSELAGE_DYNAMIC/my-data/config.json`,
-`$FUSELAGE_STATIC/sdk/bin/gcc`, etc.
+These are inherited by child processes. Fixed-path archives (`/run/fuselage/NAME`)
+do not affect `FUSELAGE_DYNAMIC` or `FUSELAGE_STATIC`.
 
 ## Privilege model
 
 `fuselage` needs to call `mount(2)`, which requires `CAP_SYS_ADMIN`.
-There are two ways to get it:
 
-### User namespace mode (default)
+### Setuid-root mode
 
-When run as a normal user, fuselage uses `unshare --user --mount
---map-root-user` to create a user namespace where the caller is
-mapped to root. This requires no installation and no privileges,
-but has a caveat: inside the namespace, the process sees itself as
-uid 0 (root). Files created on real filesystems are owned by the
-real user, but tools like `id` and `ls` show uid 0. `sudo` will
-not work inside the namespace.
-
-This is the only mode available to the bash implementation, since
-bash drops setuid privileges on startup.
-
-### Setuid binary mode (future, requires C implementation)
-
-A compiled C binary can be installed setuid-root. The privileged
-window is minimal:
+When the binary is installed setuid-root, the privilege window is minimal:
 
 1. Save the caller's real UID/GID.
-2. `unshare(CLONE_NEWNS)` -- create a private mount namespace.
-3. Mount a tmpfs and extract/mount archives.
-4. `chown` mount roots to the real user.
-5. `setresuid(real_uid, real_uid, real_uid)` -- permanently and
-   irreversibly drop all privileges.
-6. `exec` the command as the original user.
+2. Create `/run/fuselage/` and any fixed-path subdirectories (while root).
+3. `unshare(CLONE_NEWNS)` — create a private mount namespace.
+4. Mount a tmpfs over the procdir and create per-invocation subdirectories.
+5. Loop-mount or extract each archive into its destination.
+6. `chown` mount roots to the real user.
+7. `seteuid` / `setresuid` — permanently and irreversibly drop all privileges.
+8. `exec` the command as the original user.
 
-This preserves normal UID semantics: the process sees its real UID,
-`sudo` works, and file ownership is straightforward. This mode
-requires a C binary because the kernel ignores setuid bits on
-scripts (bash, Python, etc.) as a security measure.
+This preserves normal UID semantics: the child process sees its real UID, `sudo`
+works inside the namespace, and file ownership is straightforward.
+
+Fixed-path mounts (`/run/fuselage/NAME`) and loop devices require this mode.
+Attempting to use them without setuid-root produces a clear error.
+
+### Unprivileged mode
+
+When run as a normal user without setuid, fuselage creates a user namespace
+(`unshare --user --mount --map-root-user`). Inside the namespace the process
+appears as uid 0, which is sufficient for `mount(2)`. Squashfs images are
+extracted (not loop-mounted), and fixed-path mounts are unavailable.
 
 ### Running as root
 
-If the caller is already root (e.g. via `sudo fuselage ...`),
-fuselage skips the user namespace and uses a plain mount namespace.
-No UID mapping caveats apply.
+If the caller is already root (e.g. via `sudo fuselage ...`), fuselage uses a
+plain mount namespace with no UID mapping. All mount types are available.
 
-## Archive format
+## Error handling
 
-Both `--static` and `--dynamic` accept two file types:
-
-1. **Zip files** -- detected by the magic bytes `PK\x03\x04` at offset 0.
-   Extracted with `unzip`.
-
-2. **Base64-encoded zip files** -- any file that does not start with
-   zip magic bytes. The entire file content is decoded with `base64 -d`
-   and then extracted as a zip. This supports embedding archives in
-   text-based formats (scripts, heredocs, etc.).
-
-## Future: herescript integration
-
-`fuselage` is designed to compose with `herescript`. A herescript file
-may embed one or more base64-encoded zip archives and invoke `fuselage`
-to make them available as directories. The shebang/marker format for
-this integration is deferred to a subsequent specification.
+- If `~/.fuselage/` does not exist it is created (mode 0700).
+- If `~/.fuselage/` exists but is not owned by the caller, fuselage aborts.
+- If an archive cannot be extracted or mounted, fuselage aborts before exec.
+- If archive names collide, fuselage aborts with a message suggesting `NAME:`.
+- If `--run` path is not found or is ambiguous, fuselage aborts with details.
+- If `--run` target is not executable, fuselage aborts.
+- If a fixed-path mount is requested in unprivileged mode, fuselage aborts with
+  a message indicating that setuid-root installation is required.
+- If the mount namespace cannot be created, fuselage aborts with a diagnostic.
 
 ## Examples
 
 ```bash
-# Just an ephemeral scratch space
+# Just an ephemeral scratch space.
 fuselage bash
 ls "$FUSELAGE_TMPDIR"   # empty, writable, gone when bash exits
 
-# Run a build with a cached SDK and a throwaway working copy
+# Run a build with a cached SDK and a throwaway working copy.
 fuselage --static=sdk:toolchain.zip --dynamic=src:source.zip \
     -- make -C "$FUSELAGE_DYNAMIC/src" -j4
 
-# Run an executable from inside an archive
+# Run an executable from inside an archive.
 fuselage --dynamic=app:my-app.zip --run bin/server --port 8080
 
-# Multiple archives
-fuselage \
-    --static=libs:libs.zip \
-    --static=assets:assets.zip \
-    --dynamic=build:build-seed.zip \
-    -- ./run-pipeline.sh
+# Build a portable Python venv at a fixed path, capture as squashfs.
+fuselage --dynamic-empty=/run/fuselage/myapp -- bash -c '
+  uv venv /run/fuselage/myapp/.venv
+  uv pip install -r requirements.txt
+  mksquashfs /run/fuselage/myapp myapp.sfs
+'
+
+# Run the captured venv (squashfs loop-mounted at the same fixed path).
+fuselage --static=/run/fuselage/myapp:myapp.sfs -- \
+  /run/fuselage/myapp/.venv/bin/python -m myapp
+
+# Bundle the above into a single self-executing binary.
+fuselage-bundle --archive=myapp.sfs --output=myapp \
+  -- --static=/run/fuselage/myapp:/proc/self/exe \
+     --run /run/fuselage/myapp/.venv/bin/python \
+     -- -m myapp
 ```
-
-## Error handling
-
-- If `~/.fuselage/` does not exist, create it (mode 0700).
-- If `~/.fuselage/` exists but is not owned by the caller, abort.
-- If a zip file cannot be extracted, abort before exec-ing the command.
-- If archive names collide, abort with a message suggesting NAME: prefix.
-- If `--run` path is not found or is ambiguous, abort with details.
-- If `--run` target is not executable, abort.
-- If the mount namespace cannot be created, abort with a diagnostic
-  suggesting either setuid installation or user namespace support.
-- Stale `procdirs/<pid>/` directories (where the pid no longer exists)
-  may be cleaned up opportunistically on startup.
