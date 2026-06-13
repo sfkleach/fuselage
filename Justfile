@@ -51,7 +51,7 @@ clear-executables: clear-executable-debug clear-executable-release
 functest-debug:
     #!/usr/bin/env bash
     set -euo pipefail
-    rm -f target/debug/fuselage
+    rm -f target/debug/fuselage target/debug/fuselage-bundle
     cargo build
     bash tests/functest.sh target/debug/fuselage plain
 
@@ -64,7 +64,7 @@ functest-setuid-run:
 functest-setuid:
     #!/usr/bin/env bash
     set -euo pipefail
-    rm -f target/release/fuselage
+    rm -f target/release/fuselage target/release/fuselage-bundle
     cargo build --release
     if [ "$(id -u)" = "0" ]; then
         chown root:root target/release/fuselage
