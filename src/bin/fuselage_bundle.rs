@@ -7,7 +7,7 @@ use std::process::Command;
 /// self-executing ELF binary.
 ///
 /// Usage:
-///   fuselage-bundle --archive=SQUASHFS --output=BINARY -- [FUSELAGE_ARGS...]
+///   fuselage-bundle [--build-dir=DIR] --archive=SQUASHFS --output=BINARY -- [FUSELAGE_ARGS...]
 ///
 /// Everything after -- is stored verbatim as the baked-in fuselage argument
 /// list. The resulting binary, when executed as `BINARY ARGS...`, does:
@@ -17,18 +17,26 @@ use std::process::Command;
 /// /proc/self/exe in FUSELAGE_ARGS is substituted at runtime with the
 /// resolved absolute path of the binary itself.
 fn main() -> Result<()> {
-    let (archive, output, fuselage_args) = parse_args()?;
-    bundle(&archive, &output, &fuselage_args)
+    let args = parse_args()?;
+    bundle(&args)
+}
+
+struct Args {
+    archive: PathBuf,
+    output: PathBuf,
+    fuselage_args: Vec<String>,
+    /// Explicit build directory. When absent a temporary directory is created
+    /// under the system temp dir and removed after bundling completes.
+    build_dir: Option<PathBuf>,
 }
 
 /// Parse command-line arguments.
-///
-/// Returns `(archive_path, output_path, fuselage_args)`.
-fn parse_args() -> Result<(PathBuf, PathBuf, Vec<String>)> {
+fn parse_args() -> Result<Args> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
 
     let mut archive: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
+    let mut build_dir: Option<PathBuf> = None;
     let mut fuselage_args: Vec<String> = Vec::new();
     let mut after_dashdash = false;
 
@@ -51,6 +59,12 @@ fn parse_args() -> Result<(PathBuf, PathBuf, Vec<String>)> {
             i += 1;
             let val = raw.get(i).context("--output requires a value")?;
             output = Some(PathBuf::from(val));
+        } else if let Some(val) = arg.strip_prefix("--build-dir=") {
+            build_dir = Some(PathBuf::from(val));
+        } else if arg == "--build-dir" {
+            i += 1;
+            let val = raw.get(i).context("--build-dir requires a value")?;
+            build_dir = Some(PathBuf::from(val));
         } else {
             anyhow::bail!("unrecognised argument: {arg:?}");
         }
@@ -64,14 +78,44 @@ fn parse_args() -> Result<(PathBuf, PathBuf, Vec<String>)> {
         anyhow::bail!("archive file not found: {}", archive.display());
     }
 
-    Ok((archive, output, fuselage_args))
+    Ok(Args {
+        archive,
+        output,
+        fuselage_args,
+        build_dir,
+    })
 }
 
 /// Generate, compile, and assemble the output binary.
-fn bundle(archive: &Path, output: &Path, fuselage_args: &[String]) -> Result<()> {
-    let build_dir = Path::new("_build");
-    std::fs::create_dir_all(build_dir).context("failed to create _build/")?;
+fn bundle(args: &Args) -> Result<()> {
+    let build_dir = match &args.build_dir {
+        Some(p) => p.clone(),
+        None => std::env::temp_dir().join(format!("_fuselage_bundle_{}", std::process::id())),
+    };
 
+    std::fs::create_dir_all(&build_dir)
+        .with_context(|| format!("failed to create build dir {}", build_dir.display()))?;
+
+    let result = bundle_in(&build_dir, &args.archive, &args.output, &args.fuselage_args);
+
+    // Always attempt cleanup; if bundling failed, preserve that error.
+    if let Err(e) = std::fs::remove_dir_all(&build_dir) {
+        eprintln!(
+            "warning: failed to remove build dir {}: {e}",
+            build_dir.display()
+        );
+    }
+
+    result
+}
+
+/// Inner bundling logic that runs inside `build_dir`.
+fn bundle_in(
+    build_dir: &Path,
+    archive: &Path,
+    output: &Path,
+    fuselage_args: &[String],
+) -> Result<()> {
     // Step 1: generate stub.c from the template with the real argument list.
     let stub_c = build_dir.join("stub.c");
     generate_stub_c(&stub_c, fuselage_args)?;
