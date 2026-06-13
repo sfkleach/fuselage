@@ -18,7 +18,7 @@ use std::process::Command;
 /// resolved absolute path of the binary itself.
 fn main() -> Result<()> {
     let (archive, output, fuselage_args) = parse_args()?;
-    pack(&archive, &output, &fuselage_args)
+    bundle(&archive, &output, &fuselage_args)
 }
 
 /// Parse command-line arguments.
@@ -68,7 +68,7 @@ fn parse_args() -> Result<(PathBuf, PathBuf, Vec<String>)> {
 }
 
 /// Generate, compile, and assemble the output binary.
-fn pack(archive: &Path, output: &Path, fuselage_args: &[String]) -> Result<()> {
+fn bundle(archive: &Path, output: &Path, fuselage_args: &[String]) -> Result<()> {
     let build_dir = Path::new("_build");
     std::fs::create_dir_all(build_dir).context("failed to create _build/")?;
 

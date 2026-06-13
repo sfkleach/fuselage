@@ -35,7 +35,7 @@ Example:
 fuselage-bundle \
   --archive=myapp.sfs \
   --output=myapp
-  --\
+  -- \
   --static=/run/fuselage/myapp:/proc/self/exe \
   --run /run/fuselage/myapp/.venv/bin/python \
   -- \
