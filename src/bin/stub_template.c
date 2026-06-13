@@ -74,10 +74,24 @@ int main(int argc, char *argv[]) {
     self_path[len] = '\0';
 
     int n_baked = baked_argc();
-    // fuselage baked_args[0..n_baked] -- self_path argv[1..argc-1]
-    // Total: 1 (fuselage) + n_baked + 1 (--) + (argc-1) (user args) + 1 (NULL)
+
+    // Check whether baked_args already contains a "--" separator. If it does,
+    // the user's runtime args slot in after the baked args with no extra "--":
+    //   fuselage [opts] -- [baked subcommand args] [user args]
+    // If not, we add "--" ourselves so that user args starting with "-" are not
+    // misinterpreted as fuselage flags:
+    //   fuselage [opts] [baked opts] -- [user args]
+    int baked_has_dashdash = 0;
+    for (int j = 0; j < n_baked; j++) {
+        if (strcmp(baked_args[j], "--") == 0) {
+            baked_has_dashdash = 1;
+            break;
+        }
+    }
+
+    // Total slots: 1 (fuselage) + n_baked + (0 or 1 for "--") + n_user + 1 (NULL)
     int n_user = argc - 1;
-    int total = 1 + n_baked + 1 + n_user + 1;
+    int total = 1 + n_baked + (baked_has_dashdash ? 0 : 1) + n_user + 1;
     const char **new_argv = malloc(total * sizeof(char *));
     if (new_argv == NULL) {
         fprintf(stderr, "fuselage stub: out of memory\n");
@@ -91,7 +105,9 @@ int main(int argc, char *argv[]) {
         // argument) with this binary's resolved path.
         new_argv[i++] = substitute_self_path(baked_args[j], self_path);
     }
-    new_argv[i++] = "--";
+    if (!baked_has_dashdash) {
+        new_argv[i++] = "--";
+    }
     for (int j = 1; j < argc; j++) {
         new_argv[i++] = argv[j];
     }
