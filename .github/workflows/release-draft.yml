@@ -71,12 +71,12 @@ jobs:
       env:
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
-    - name: Package binary
+    - name: Package binaries
       id: package
       run: |
-        BINARY=target/${{ matrix.target }}/release/fuselage
+        RELEASE=target/${{ matrix.target }}/release
         ARCHIVE=fuselage-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
-        tar czf "$ARCHIVE" -C "$(dirname $BINARY)" "$(basename $BINARY)"
+        tar czf "$ARCHIVE" -C "$RELEASE" fuselage fuselage-bundle
         echo "archive=$ARCHIVE" >> $GITHUB_OUTPUT
 
     - name: Generate checksum
