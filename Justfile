@@ -101,6 +101,15 @@ setuid-release:
 install:
     cargo install --path .
 
+setuid-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release
+    sudo cp target/release/fuselage /usr/local/bin/fuselage
+    sudo cp target/release/fuselage-bundle /usr/local/bin/fuselage-bundle
+    sudo chown root:root /usr/local/bin/fuselage
+    sudo chmod u+s /usr/local/bin/fuselage
+
 
 # Sign and push a release tag, triggering the release-draft.yml workflow.
 # Monitor the workflow run manually via: gh run list --workflow=release-draft.yml

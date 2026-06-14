@@ -115,6 +115,12 @@ fn bundle(args: &Args) -> Result<()> {
     }
     // Only create (and later remove) the directory if this run is responsible for it.
     let we_created = !pre_existed;
+    if we_created && !args.keep && args.output.starts_with(&build_dir) {
+        anyhow::bail!(
+            "--output is inside --build-dir and will be deleted on cleanup; \
+             use --keep to preserve the build directory, or choose an output path outside it"
+        );
+    }
     if we_created {
         std::fs::create_dir_all(&build_dir)
             .with_context(|| format!("failed to create build dir {}", build_dir.display()))?;
@@ -225,18 +231,25 @@ fn compile_stub(src: &Path, dest: &Path) -> Result<()> {
 /// Assemble the output binary: stub ELF + zero padding to 4096-byte alignment
 /// + squashfs image.
 fn assemble(output: &Path, stub: &Path, squashfs: &Path) -> Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
+
     let stub_bytes =
         std::fs::read(stub).with_context(|| format!("failed to read {}", stub.display()))?;
-    let sfs_bytes = std::fs::read(squashfs)
-        .with_context(|| format!("failed to read {}", squashfs.display()))?;
 
-    // Verify the squashfs magic.
-    if sfs_bytes.len() < 4 || (&sfs_bytes[..4] != b"hsqs" && &sfs_bytes[..4] != b"sqsh") {
+    // Open and validate the squashfs magic before creating any output file,
+    // so a bad input fails without side-effects.
+    let mut sfs_file = std::fs::File::open(squashfs)
+        .with_context(|| format!("failed to open {}", squashfs.display()))?;
+    let mut magic = [0u8; 4];
+    if sfs_file.read_exact(&mut magic).is_err() || (&magic != b"hsqs" && &magic != b"sqsh") {
         anyhow::bail!(
             "{}: does not look like a squashfs image (bad magic)",
             squashfs.display()
         );
     }
+    sfs_file
+        .seek(SeekFrom::Start(0))
+        .with_context(|| format!("failed to seek {}", squashfs.display()))?;
 
     let stub_len = stub_bytes.len() as u64;
     let pad_len = align_up(stub_len, 4096) - stub_len;
@@ -252,7 +265,7 @@ fn assemble(output: &Path, stub: &Path, squashfs: &Path) -> Result<()> {
     f.write_all(&padding)
         .with_context(|| format!("failed to write padding to {}", output.display()))?;
 
-    f.write_all(&sfs_bytes)
+    std::io::copy(&mut sfs_file, &mut f)
         .with_context(|| format!("failed to write squashfs to {}", output.display()))?;
 
     Ok(())

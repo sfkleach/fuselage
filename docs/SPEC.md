@@ -136,7 +136,9 @@ archive inputs.
     tmp/                       scratch space ($FUSELAGE_TMPDIR)
     dynamic/NAME/              --dynamic extractions (relative names)
     static/NAME/               --static read-only bind-mounts (relative names)
-  cache/<sha256-prefix>/       --cache-static persistent squashfs cache
+  cache/<sha256-prefix>.sfs    --cache-static squashfs image (when mksquashfs available)
+  cache/<sha256-prefix>/       --cache-static extracted directory (mksquashfs fallback)
+  cache/<sha256-prefix>.complete  extraction-complete sentinel
 
 /run/fuselage/
   NAME/                        fixed-path mounts (absolute-name archives)
@@ -144,8 +146,9 @@ archive inputs.
 
 - `procdirs/<pid>/` is overlaid with a tmpfs inside the mount namespace. Other
   processes see it as an empty directory. It is removed on exit.
-- `cache/<sha256-prefix>/` lives on the real filesystem and persists across
-  invocations. A sentinel file marks a finished extraction.
+- `cache/` lives on the real filesystem and persists across invocations. Each cache entry has a
+  `<sha256-prefix>.complete` sentinel plus either a `<sha256-prefix>.sfs` squashfs image (when
+  `mksquashfs` is available) or a `<sha256-prefix>/` extracted directory as a fallback.
 - `/run/fuselage/` is created during the privilege window if it does not exist.
   Inside the private mount namespace, `/run/fuselage/NAME` is visible only to
   the fuselage invocation that created it; concurrent invocations do not

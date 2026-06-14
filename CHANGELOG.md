@@ -25,6 +25,17 @@ Following the style in https://keepachangelog.com/en/1.0.0/
   `PATH` and mounts its own embedded squashfs at the fixed path. Supports
   `--build-dir`, `--exist-ok`, and `--keep` for control over the intermediate
   build directory.
+- `fuselage-bundle` is now included in pre-built release tarballs and installed
+  by `install.sh` alongside `fuselage`.
+- `just setuid-install` recipe: builds a release binary and installs both
+  `fuselage` and `fuselage-bundle` to `/usr/local/bin` with the setuid bit set
+  on `fuselage`.
+
+### Fixed
+
+- `fuselage-bundle` now rejects `--output` paths that fall inside `--build-dir`
+  when `--keep` is not set, preventing the output from being silently deleted
+  during build-directory teardown.
 
 ## v0.2.5, Revised publish process
 

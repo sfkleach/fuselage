@@ -389,6 +389,30 @@ else
     echo "  SKIP: fuselage-bundle (requires mksquashfs, gcc, and a built fuselage-bundle)"
 fi
 
+# ── fuselage-bundle argument validation ────────────────────────────────────────
+# These tests do not require mksquashfs or gcc; they exercise early-exit checks.
+
+if [[ -x "$BUNDLE" ]]; then
+    BDIR="$WORKDIR/bundle-argtest-dir"
+    rm -rf "$BDIR"
+
+    # --output inside --build-dir without --keep must be rejected before any work.
+    check_fails "bundle: --output inside --build-dir is rejected" \
+        "$BUNDLE" --archive="$WORKDIR/data.zip" \
+                  --build-dir="$BDIR" \
+                  --output="$BDIR/out"
+
+    # The build-dir must not have been created: the check fires before mkdir.
+    if [[ ! -d "$BDIR" ]]; then
+        pass "bundle: build-dir not created on early rejection"
+    else
+        fail "bundle: build-dir not created on early rejection (directory exists)"
+        rm -rf "$BDIR"
+    fi
+else
+    echo "  SKIP: fuselage-bundle argument validation (fuselage-bundle not built)"
+fi
+
 echo ""
 
 # ── Setuid-specific tests ─────────────────────────────────────────────────────
