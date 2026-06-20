@@ -1,5 +1,15 @@
 name: Release Draft
 
+# Stage 1 of the two-stage release process. Triggered automatically when a
+# version tag (vX.Y.Z, including pre-release suffixes such as -rc1) is pushed —
+# normally via `just draft-release vX.Y.Z`. It validates that the CHANGELOG's
+# top section matches the tag, runs the full test suite, and then creates a
+# *draft* GitHub release with the per-architecture binary tarballs attached.
+#
+# Nothing is published to the public at this point: the release stays in draft
+# so it can be reviewed on GitHub. Once the draft looks correct, run stage 2
+# (release-publish.yml) to flip it to published and push to crates.io.
+
 on:
   push:
     tags:
