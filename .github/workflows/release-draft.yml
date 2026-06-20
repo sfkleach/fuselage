@@ -76,7 +76,7 @@ jobs:
       run: |
         RELEASE=target/${{ matrix.target }}/release
         ARCHIVE=fuselage-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
-        tar czf "$ARCHIVE" -C "$RELEASE" fuselage fuselage-bundle
+        tar czf "$ARCHIVE" -C "$RELEASE" fuselage fuselage-bundle uv-bundle
         echo "archive=$ARCHIVE" >> $GITHUB_OUTPUT
 
     - name: Generate checksum
