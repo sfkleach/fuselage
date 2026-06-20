@@ -13,6 +13,7 @@ echo "==> Installing apt packages (requires sudo)..."
 sudo apt-get update -q
 sudo apt-get install -y \
     build-essential \
+    curl \
     squashfs-tools \
     musl-tools
 
