@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -18,10 +19,56 @@ struct Args {
     extra_uv_args: Vec<String>,
     /// Include dev dependencies in the bundle. Defaults to false (--no-dev).
     dev: bool,
+    /// Trace the bundling process: list squashfs contents and print sizes.
+    verbose: bool,
+}
+
+/// An entry from the squashfs filesystem, used for tree display.
+struct SquashfsEntry {
+    full_path: PathBuf,
+    name: String,
+    is_dir: bool,
+    link: Option<PathBuf>,
+}
+
+fn print_help() {
+    print!(
+        "\
+Usage: uv-bundle --project=DIR --output=BINARY [OPTIONS]
+
+Pack a uv-managed Python project into a self-executing ELF binary.
+
+Required:
+  --project=DIR       Directory containing pyproject.toml.
+  --output=BINARY     Path for the produced self-executing ELF binary.
+
+Options:
+  --module=MOD        Python module passed to -m. Defaults to the package name
+                      read from pyproject.toml.
+  --dev               Include dev dependencies (default: --no-dev).
+  --squashfs=PATH     Retain the intermediate squashfs at PATH instead of a
+                      temporary file.
+  --uv-arg=ARG        Extra argument forwarded to 'uv sync' (repeatable).
+  --verbose           Trace bundling: print squashfs tree and file sizes.
+  --help              Show this message and exit.
+
+The pipeline runs four steps in order:
+  1. fuselage --dynamic-empty creates a private tmpfs at /run/fuselage/<name>.
+  2. uv sync installs the project's dependencies into that tmpfs.
+  3. mksquashfs compresses the tmpfs into a squashfs archive.
+  4. fuselage-bundle packs the archive into the output ELF.
+
+Requires: fuselage (setuid), fuselage-bundle, uv, mksquashfs, gcc.
+"
+    );
 }
 
 fn parse_args() -> Result<Args> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.iter().any(|a| a == "--help" || a == "-h") {
+        print_help();
+        std::process::exit(0);
+    }
     parse_args_from(&raw)
 }
 
@@ -32,6 +79,7 @@ fn parse_args_from(raw: &[String]) -> Result<Args> {
     let mut squashfs: Option<PathBuf> = None;
     let mut extra_uv_args: Vec<String> = Vec::new();
     let mut dev = false;
+    let mut verbose = false;
 
     let mut i = 0;
     while i < raw.len() {
@@ -68,6 +116,8 @@ fn parse_args_from(raw: &[String]) -> Result<Args> {
             extra_uv_args.push(val.clone());
         } else if arg == "--dev" {
             dev = true;
+        } else if arg == "--verbose" {
+            verbose = true;
         } else {
             anyhow::bail!("unrecognised argument: {arg:?}");
         }
@@ -88,6 +138,7 @@ fn parse_args_from(raw: &[String]) -> Result<Args> {
         squashfs,
         extra_uv_args,
         dev,
+        verbose,
     })
 }
 
@@ -116,8 +167,31 @@ fn run(args: &Args) -> Result<()> {
         args.dev,
     )?;
 
+    if args.verbose {
+        let sq_size = std::fs::metadata(squashfs_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        eprintln!("uv-bundle: squashfs contents ({}):", format_size(sq_size));
+        if let Err(e) = print_squashfs_tree(squashfs_path) {
+            eprintln!("uv-bundle: warning: could not list squashfs: {e}");
+        }
+    }
+
     // Step 4: pack squashfs + baked args into the output ELF.
     let pack_result = run_fuselage_bundle(squashfs_path, &args.output, &mount_point, &module);
+
+    if args.verbose && pack_result.is_ok() {
+        let sq_size = std::fs::metadata(squashfs_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let out_size = std::fs::metadata(&args.output)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let stub_size = out_size.saturating_sub(sq_size);
+        eprintln!("uv-bundle: stub+pad  {}", format_size(stub_size));
+        eprintln!("uv-bundle: squashfs  {}", format_size(sq_size));
+        eprintln!("uv-bundle: output    {}", format_size(out_size));
+    }
 
     // Remove temp squashfs unless the caller asked to keep it at an explicit path.
     if args.squashfs.is_none() {
@@ -242,6 +316,101 @@ fn run_fuselage_bundle(
     println!("uv-bundle: wrote {}", output.display());
 
     Ok(())
+}
+
+fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// Print the contents of a squashfs file as a tree to stderr.
+fn print_squashfs_tree(squashfs_path: &Path) -> Result<()> {
+    use backhand::{FilesystemReader, InnerNode};
+
+    let file = std::fs::File::open(squashfs_path)
+        .with_context(|| format!("cannot open {}", squashfs_path.display()))?;
+    let reader = FilesystemReader::from_reader_with_offset(std::io::BufReader::new(file), 0)
+        .with_context(|| format!("cannot read squashfs {}", squashfs_path.display()))?;
+
+    let mut entries: Vec<SquashfsEntry> = Vec::new();
+    for node in reader.files() {
+        let full_path = PathBuf::from(&node.fullpath);
+        // Skip the squashfs root entry itself.
+        if full_path == Path::new("/") {
+            continue;
+        }
+        let name = full_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| full_path.to_string_lossy().into_owned());
+        let is_dir = matches!(node.inner, InnerNode::Dir(_));
+        let link = if let InnerNode::Symlink(sym) = &node.inner {
+            Some(PathBuf::from(&sym.link))
+        } else {
+            None
+        };
+        entries.push(SquashfsEntry {
+            full_path,
+            name,
+            is_dir,
+            link,
+        });
+    }
+
+    // Group by parent path, children sorted alphabetically by name.
+    let mut children: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
+    for (i, entry) in entries.iter().enumerate() {
+        let parent = entry
+            .full_path
+            .parent()
+            .unwrap_or(Path::new("/"))
+            .to_path_buf();
+        children.entry(parent).or_default().push(i);
+    }
+    for kids in children.values_mut() {
+        kids.sort_by(|&a, &b| entries[a].name.cmp(&entries[b].name));
+    }
+
+    eprintln!(".");
+    print_squashfs_subtree(Path::new("/"), &entries, &children, "");
+    Ok(())
+}
+
+fn print_squashfs_subtree(
+    parent: &Path,
+    entries: &[SquashfsEntry],
+    children: &BTreeMap<PathBuf, Vec<usize>>,
+    prefix: &str,
+) {
+    let Some(kids) = children.get(parent) else {
+        return;
+    };
+    let count = kids.len();
+    for (pos, &idx) in kids.iter().enumerate() {
+        let entry = &entries[idx];
+        let is_last = pos + 1 == count;
+        let connector = if is_last { "└── " } else { "├── " };
+        let display_name = if entry.is_dir {
+            format!("{}/", entry.name)
+        } else if let Some(ref link) = entry.link {
+            format!("{} -> {}", entry.name, link.display())
+        } else {
+            entry.name.clone()
+        };
+        eprintln!("{prefix}{connector}{display_name}");
+        let child_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
+        print_squashfs_subtree(&entry.full_path, entries, children, &child_prefix);
+    }
 }
 
 #[cfg(test)]
@@ -428,6 +597,31 @@ mod tests {
     }
 
     #[test]
+    fn parse_args_verbose_defaults_to_false() {
+        let tmp = TempDir::new().unwrap();
+        write_pyproject(tmp.path(), "x");
+        let raw = ss(&[
+            &format!("--project={}", tmp.path().display()),
+            "--output=/out",
+        ]);
+        let args = parse_args_from(&raw).unwrap();
+        assert!(!args.verbose);
+    }
+
+    #[test]
+    fn parse_args_verbose_flag_sets_verbose_true() {
+        let tmp = TempDir::new().unwrap();
+        write_pyproject(tmp.path(), "x");
+        let raw = ss(&[
+            &format!("--project={}", tmp.path().display()),
+            "--output=/out",
+            "--verbose",
+        ]);
+        let args = parse_args_from(&raw).unwrap();
+        assert!(args.verbose);
+    }
+
+    #[test]
     fn parse_args_no_pyproject_is_error() {
         // /tmp exists but has no pyproject.toml.
         let raw = ss(&["--project=/tmp", "--output=/out"]);
@@ -444,6 +638,7 @@ mod tests {
             squashfs: None,
             extra_uv_args: vec![],
             dev: false,
+            verbose: false,
         }
     }
 

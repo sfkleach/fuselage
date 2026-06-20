@@ -208,24 +208,41 @@ fn c_string_literal(s: &str) -> String {
     out
 }
 
-/// Compile `src` with gcc into a statically linked binary at `dest`.
+/// Compile `src` into a statically linked binary at `dest`.
+///
+/// Prefers musl-gcc when available: musl produces stripped static binaries of
+/// ~50 KB versus ~700 KB for glibc, because musl was designed for efficient
+/// static linking. Falls back to plain gcc if musl-gcc is not on PATH.
 fn compile_stub(src: &Path, dest: &Path) -> Result<()> {
-    let status = Command::new("gcc")
+    let compiler = if which_compiler("musl-gcc") { "musl-gcc" } else { "gcc" };
+
+    let status = Command::new(compiler)
         .args([
             "-static",
             "-O2",
+            "-s",
             "-o",
             dest.to_str().unwrap(),
             src.to_str().unwrap(),
         ])
         .status()
-        .context("failed to run gcc — is gcc installed?")?;
+        .with_context(|| format!("failed to run {compiler} — is it installed?"))?;
 
     if !status.success() {
-        anyhow::bail!("gcc failed to compile {}", src.display());
+        anyhow::bail!("{compiler} failed to compile {}", src.display());
     }
 
     Ok(())
+}
+
+/// Return true if `name` resolves to an executable on PATH.
+fn which_compiler(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|path| {
+            std::env::split_paths(&path)
+                .any(|dir| dir.join(name).is_file())
+        })
+        .unwrap_or(false)
 }
 
 /// Assemble the output binary: stub ELF + zero padding to 4096-byte alignment

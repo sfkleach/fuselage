@@ -26,3 +26,10 @@ target
 /target
 /_tmp/
 /_build/
+/tests/hello/__pycache__/
+/tests/hello/.venv/
+/tests/hello/src/hello/__pycache__/
+/tests/hello/src/*.egg-info/
+
+# Claude Code local state
+/.claude/

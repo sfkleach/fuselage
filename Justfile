@@ -101,12 +101,21 @@ setuid-release:
 install:
     cargo install --path .
 
-setuid-install:
+# Installs then makes fuselage setuid-root so it can create fixed-path mounts.
+# Requires that $HOME is not mounted with nosuid (uncommon on developer machines).
+setuid-install: install
+    sudo chown root:root ~/.cargo/bin/fuselage
+    sudo chmod u+s ~/.cargo/bin/fuselage
+
+# Builds release binaries, copies them to /usr/local/bin, and makes fuselage
+# setuid-root. Use this on shared machines or when $HOME is mounted with nosuid.
+setuid-sysinstall:
     #!/usr/bin/env bash
     set -euo pipefail
     cargo build --release
     sudo cp target/release/fuselage /usr/local/bin/fuselage
     sudo cp target/release/fuselage-bundle /usr/local/bin/fuselage-bundle
+    sudo cp target/release/uv-bundle /usr/local/bin/uv-bundle
     sudo chown root:root /usr/local/bin/fuselage
     sudo chmod u+s /usr/local/bin/fuselage
 
