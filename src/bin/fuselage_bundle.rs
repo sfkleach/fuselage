@@ -214,7 +214,11 @@ fn c_string_literal(s: &str) -> String {
 /// ~50 KB versus ~700 KB for glibc, because musl was designed for efficient
 /// static linking. Falls back to plain gcc if musl-gcc is not on PATH.
 fn compile_stub(src: &Path, dest: &Path) -> Result<()> {
-    let compiler = if which_compiler("musl-gcc") { "musl-gcc" } else { "gcc" };
+    let compiler = if which_compiler("musl-gcc") {
+        "musl-gcc"
+    } else {
+        "gcc"
+    };
 
     let status = Command::new(compiler)
         .args([
@@ -238,10 +242,7 @@ fn compile_stub(src: &Path, dest: &Path) -> Result<()> {
 /// Return true if `name` resolves to an executable on PATH.
 fn which_compiler(name: &str) -> bool {
     std::env::var_os("PATH")
-        .map(|path| {
-            std::env::split_paths(&path)
-                .any(|dir| dir.join(name).is_file())
-        })
+        .map(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()))
         .unwrap_or(false)
 }
 
