@@ -50,6 +50,12 @@ check_fails() {
     fi
 }
 
+# True if a C compiler the bundler can use is available. fuselage-bundle prefers
+# musl-gcc and falls back to gcc, so either is sufficient to build the stub.
+have_cc() {
+    command -v gcc >/dev/null 2>&1 || command -v musl-gcc >/dev/null 2>&1
+}
+
 # ── Fixture setup ─────────────────────────────────────────────────────────────
 
 WORKDIR="$(dirname "$0")/../_build/functest-fixtures"
@@ -363,7 +369,7 @@ echo "--- fuselage-bundle ---"
 
 BUNDLE="$(dirname "$FUSELAGE")/fuselage-bundle"
 
-if command -v mksquashfs >/dev/null 2>&1 && command -v gcc >/dev/null 2>&1 && [[ -x "$BUNDLE" ]]; then
+if command -v mksquashfs >/dev/null 2>&1 && have_cc && [[ -x "$BUNDLE" ]]; then
     mkdir -p "$WORKDIR/bundleroot"
     printf '#!/bin/sh\necho "hello from bundled squashfs"\n' > "$WORKDIR/bundleroot/run.sh"
     chmod +x "$WORKDIR/bundleroot/run.sh"
@@ -386,7 +392,7 @@ if command -v mksquashfs >/dev/null 2>&1 && command -v gcc >/dev/null 2>&1 && [[
     check_output "bundle: self-executing binary runs" "hello from bundled squashfs" \
         env "PATH=$FUSELAGE_DIR:$PATH" "$WORKDIR/selfexec"
 else
-    echo "  SKIP: fuselage-bundle (requires mksquashfs, gcc, and a built fuselage-bundle)"
+    echo "  SKIP: fuselage-bundle (requires mksquashfs, gcc or musl-gcc, and a built fuselage-bundle)"
 fi
 
 # ── fuselage-bundle argument validation ────────────────────────────────────────
@@ -428,7 +434,7 @@ echo "--- uv-bundle ---"
 UV_BUNDLE="$(dirname "$FUSELAGE")/uv-bundle"
 
 if command -v uv >/dev/null 2>&1 && command -v mksquashfs >/dev/null 2>&1 && \
-        command -v gcc >/dev/null 2>&1 && [[ -x "$BUNDLE" ]] && [[ -x "$UV_BUNDLE" ]] && \
+        have_cc && [[ -x "$BUNDLE" ]] && [[ -x "$UV_BUNDLE" ]] && \
         [[ "$MODE" == "setuid" ]]; then
 
     PROJDIR="$WORKDIR/uvbundle-project"
@@ -471,7 +477,7 @@ PYPROJ
         fail "uv-bundle: pipeline failed to build bundle"
     fi
 else
-    echo "  SKIP: uv-bundle (requires setuid mode, uv, mksquashfs, gcc, fuselage-bundle, and uv-bundle)"
+    echo "  SKIP: uv-bundle (requires setuid mode, uv, mksquashfs, gcc or musl-gcc, fuselage-bundle, and uv-bundle)"
 fi
 
 echo ""
