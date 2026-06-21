@@ -77,32 +77,12 @@ functest-setuid:
 
 functest: functest-debug functest-setuid
 
-
-setuid-debug:
-    #!/usr/bin/env bash
-    if [ "$(id -u)" = "0" ]; then
-        chown root:root target/debug/fuselage
-        chmod u+s target/debug/fuselage
-    else
-        sudo chown root:root target/debug/fuselage
-        sudo chmod u+s target/debug/fuselage
-    fi
-
-setuid-release:
-    #!/usr/bin/env bash
-    if [ "$(id -u)" = "0" ]; then
-        chown root:root target/release/fuselage
-        chmod u+s target/release/fuselage
-    else
-        sudo chown root:root target/release/fuselage
-        sudo chmod u+s target/release/fuselage
-    fi
-
+# Install fuselage locally via cargo install --path . (no sudo required).
 install:
     cargo install --path .
 
-# Installs then makes fuselage setuid-root so it can create fixed-path mounts.
 # Requires that $HOME is not mounted with nosuid (uncommon on developer machines).
+# Installs locally then makes fuselage setuid-root so it can create fixed-path mounts.
 setuid-install: install
     sudo chown root:root ~/.cargo/bin/fuselage
     sudo chmod u+s ~/.cargo/bin/fuselage
