@@ -2,7 +2,7 @@
 
 Following the style in https://keepachangelog.com/en/1.0.0/
 
-## Unreleased
+## v0.4.0, uv-bundle 2026-06-21
 
 ### Added
 
