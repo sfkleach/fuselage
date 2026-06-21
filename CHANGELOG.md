@@ -17,6 +17,11 @@ Following the style in https://keepachangelog.com/en/1.0.0/
   extra arguments to `uv sync`, repeatable), and `--verbose` (trace the build and
   print the squashfs tree and file sizes). Requires `fuselage` (setuid),
   `fuselage-bundle`, `uv`, `mksquashfs`, and `gcc`.
+- `uv-bundle` builds against the system Python (`UV_PYTHON_PREFERENCE=system`)
+  rather than a uv-managed download, so the bundled venv references a stable
+  interpreter path instead of one under the build user's home directory. Before
+  building, the system Python is checked against `[project].requires-python`; a
+  mismatch is an error unless `--ignore-version-mismatch` is given.
 - `uv-bundle` is now included in pre-built release tarballs and installed by
   `install.sh` alongside `fuselage` and `fuselage-bundle`.
 - `just setuid-sysinstall` recipe: builds release binaries and copies `fuselage`,

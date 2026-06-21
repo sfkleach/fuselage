@@ -48,6 +48,8 @@ anyhow = "1"
 thiserror = "2"
 # TOML parsing (reads pyproject.toml in uv-bundle)
 toml = "0.8"
+# PEP 440 version and specifier handling (checks requires-python in uv-bundle)
+pep440_rs = "0.7"
 
 [[bin]]
 name = "fuselage-bundle"
