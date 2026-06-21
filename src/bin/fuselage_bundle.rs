@@ -239,10 +239,23 @@ fn compile_stub(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Return true if `name` resolves to an executable on PATH.
+/// Return true if `name` resolves to an executable file on PATH.
+///
+/// The executable-bit check matters here: a regular file named `musl-gcc` that
+/// is not executable would otherwise be selected, and the failure would surface
+/// later as a confusing "permission denied" when `compile_stub` tries to run it,
+/// rather than falling back cleanly to gcc.
 fn which_compiler(name: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
     std::env::var_os("PATH")
-        .map(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()))
+        .map(|path| {
+            std::env::split_paths(&path).any(|dir| {
+                let candidate = dir.join(name);
+                std::fs::metadata(&candidate)
+                    .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                    .unwrap_or(false)
+            })
+        })
         .unwrap_or(false)
 }
 
