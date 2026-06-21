@@ -520,6 +520,43 @@ PYPROJ
         else
             fail "uv-bundle: --ignore-version-mismatch did not downgrade the check (got: $ignore_out)"
         fi
+
+        # ── [project.scripts] entry point (--script) ──────────────────────────
+        # Bundle the tests/hello fixture targeting its console script rather than
+        # a module.  The fixture is copied into the work dir first so the build
+        # (uv sync, .venv, *.egg-info) does not write artefacts into the repo.
+        HELLO_SRC="$(dirname "$0")/hello"
+        HELLO_PROJ="$WORKDIR/uvbundle-hello"
+        if [[ -f "$HELLO_SRC/pyproject.toml" ]]; then
+            rm -rf "$HELLO_PROJ"
+            cp -r "$HELLO_SRC" "$HELLO_PROJ"
+
+            if env "PATH=$FUSELAGE_DIR:$PATH" "$UV_BUNDLE" \
+                    --project="$HELLO_PROJ" \
+                    --script=hello \
+                    --output="$WORKDIR/uvbundle-script-out" \
+                    >/dev/null 2>&1; then
+                # The console script prints a fixed greeting; check it runs.
+                check_output "uv-bundle: --script runs the [project.scripts] entry point" \
+                    "Hello, World!" \
+                    env "PATH=$FUSELAGE_DIR:$PATH" "$WORKDIR/uvbundle-script-out"
+            else
+                fail "uv-bundle: --script failed to build bundle"
+            fi
+
+            # An undeclared script name must be rejected before any build work.
+            script_err="$(env "PATH=$FUSELAGE_DIR:$PATH" "$UV_BUNDLE" \
+                --project="$HELLO_PROJ" \
+                --script=does-not-exist \
+                --output="$WORKDIR/uvbundle-script-bad" 2>&1 || true)"
+            if grep -q "is not in \[project.scripts\]" <<<"$script_err"; then
+                pass "uv-bundle: unknown --script is rejected with available list"
+            else
+                fail "uv-bundle: unknown --script not rejected as expected (got: $script_err)"
+            fi
+        else
+            echo "  SKIP: uv-bundle --script (tests/hello fixture not found)"
+        fi
     else
         fail "uv-bundle: pipeline failed to build bundle"
     fi

@@ -14,7 +14,11 @@ struct Args {
     project: PathBuf,
     output: PathBuf,
     /// Python module to run with `-m`. Defaults to the package name.
+    /// Mutually exclusive with `script`.
     module: Option<String>,
+    /// A `[project.scripts]` console script to run directly from `.venv/bin/`.
+    /// Mutually exclusive with `module`.
+    script: Option<String>,
     /// Keep the intermediate squashfs at this explicit path.
     squashfs: Option<PathBuf>,
     /// Extra arguments forwarded verbatim to `uv sync`.
@@ -25,6 +29,14 @@ struct Args {
     ignore_version_mismatch: bool,
     /// Trace the bundling process: list squashfs contents and print sizes.
     verbose: bool,
+}
+
+/// How the bundled application is launched inside the namespace.
+enum EntryPoint {
+    /// Run `.venv/bin/python -m <module>`.
+    Module(String),
+    /// Run the console script `.venv/bin/<name>` directly.
+    Script(String),
 }
 
 /// An entry from the squashfs filesystem, used for tree display.
@@ -48,7 +60,10 @@ Required:
 
 Options:
   --module=MOD        Python module passed to -m. Defaults to the package name
-                      read from pyproject.toml.
+                      read from pyproject.toml. Mutually exclusive with --script.
+  --script=NAME       Run the [project.scripts] console script NAME directly
+                      (.venv/bin/NAME) instead of 'python -m'. Mutually
+                      exclusive with --module.
   --dev               Include dev dependencies (default: --no-dev).
   --squashfs=PATH     Retain the intermediate squashfs at PATH instead of a
                       temporary file.
@@ -89,6 +104,7 @@ fn parse_args_from(raw: &[String]) -> Result<Args> {
     let mut project: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
     let mut module: Option<String> = None;
+    let mut script: Option<String> = None;
     let mut squashfs: Option<PathBuf> = None;
     let mut extra_uv_args: Vec<String> = Vec::new();
     let mut dev = false;
@@ -116,6 +132,12 @@ fn parse_args_from(raw: &[String]) -> Result<Args> {
             i += 1;
             let val = raw.get(i).context("--module requires a value")?;
             module = Some(val.clone());
+        } else if let Some(val) = arg.strip_prefix("--script=") {
+            script = Some(val.to_owned());
+        } else if arg == "--script" {
+            i += 1;
+            let val = raw.get(i).context("--script requires a value")?;
+            script = Some(val.clone());
         } else if let Some(val) = arg.strip_prefix("--squashfs=") {
             squashfs = Some(PathBuf::from(val));
         } else if arg == "--squashfs" {
@@ -147,10 +169,15 @@ fn parse_args_from(raw: &[String]) -> Result<Args> {
         anyhow::bail!("no pyproject.toml found in {}", project.display());
     }
 
+    if module.is_some() && script.is_some() {
+        anyhow::bail!("--module and --script are mutually exclusive");
+    }
+
     Ok(Args {
         project,
         output,
         module,
+        script,
         squashfs,
         extra_uv_args,
         dev,
@@ -161,7 +188,7 @@ fn parse_args_from(raw: &[String]) -> Result<Args> {
 
 fn run(args: &Args) -> Result<()> {
     let package_name = resolve_package_name(args)?;
-    let module = args.module.as_deref().unwrap_or(&package_name).to_owned();
+    let entry_point = resolve_entry_point(args, &package_name)?;
     let mount_point = format!("/run/fuselage/{package_name}");
 
     // Check the system Python against requires-python before doing any work, so
@@ -200,7 +227,7 @@ fn run(args: &Args) -> Result<()> {
     }
 
     // Step 4: pack squashfs + baked args into the output ELF.
-    let pack_result = run_fuselage_bundle(squashfs_path, &args.output, &mount_point, &module);
+    let pack_result = run_fuselage_bundle(squashfs_path, &args.output, &mount_point, &entry_point);
 
     if args.verbose && pack_result.is_ok() {
         let sq_size = std::fs::metadata(squashfs_path)
@@ -269,6 +296,69 @@ fn resolve_package_name(args: &Args) -> Result<String> {
     }
 
     Ok(normalised)
+}
+
+/// Decide how the bundled application is launched.
+///
+/// `--script` and `--module` are mutually exclusive (enforced during parsing).
+/// With neither, fall back to running the package as a module (`-m <package>`),
+/// preserving the historical default.
+fn resolve_entry_point(args: &Args, package_name: &str) -> Result<EntryPoint> {
+    if let Some(script) = &args.script {
+        validate_script(&args.project, script)?;
+        Ok(EntryPoint::Script(script.clone()))
+    } else if let Some(module) = &args.module {
+        Ok(EntryPoint::Module(module.clone()))
+    } else {
+        Ok(EntryPoint::Module(package_name.to_owned()))
+    }
+}
+
+/// Verify `name` is declared in `[project.scripts]` and is a safe single path
+/// component (it is used as `.venv/bin/<name>` in the baked-in invocation).
+///
+/// Validating against the declared scripts catches typos at build time rather
+/// than producing a bundle that fails at runtime when `.venv/bin/<name>` does
+/// not exist.
+fn validate_script(project: &Path, name: &str) -> Result<()> {
+    // A script name is a single path component under .venv/bin/, so the same
+    // constraints as a mount name apply: no path separators or traversal.
+    if name.is_empty() || name == "." || name == ".." || name.contains([':', '/']) {
+        anyhow::bail!(
+            "--script {name:?} is not a valid console-script name \
+             (must be a single path component with no ':' or '/')"
+        );
+    }
+
+    let pyproject = project.join("pyproject.toml");
+    let content = std::fs::read_to_string(&pyproject)
+        .with_context(|| format!("failed to read {}", pyproject.display()))?;
+    let doc: toml::Value = content
+        .parse()
+        .with_context(|| format!("failed to parse {}", pyproject.display()))?;
+
+    let scripts = doc
+        .get("project")
+        .and_then(|p| p.get("scripts"))
+        .and_then(|s| s.as_table())
+        .with_context(|| {
+            format!(
+                "{}: --script={name:?} given but [project.scripts] is not defined",
+                pyproject.display()
+            )
+        })?;
+
+    if scripts.contains_key(name) {
+        return Ok(());
+    }
+
+    let mut available: Vec<&str> = scripts.keys().map(String::as_str).collect();
+    available.sort_unstable();
+    anyhow::bail!(
+        "{}: --script={name:?} is not in [project.scripts] (available: {})",
+        pyproject.display(),
+        available.join(", ")
+    );
 }
 
 /// Read the optional `[project].requires-python` constraint from `pyproject.toml`.
@@ -449,17 +539,29 @@ fn run_fuselage_bundle(
     squashfs_path: &Path,
     output: &Path,
     mount_point: &str,
-    module: &str,
+    entry_point: &EntryPoint,
 ) -> Result<()> {
-    let status = Command::new("fuselage-bundle")
-        .arg(format!("--archive={}", squashfs_path.display()))
+    let mut cmd = Command::new("fuselage-bundle");
+    cmd.arg(format!("--archive={}", squashfs_path.display()))
         .arg(format!("--output={}", output.display()))
         .arg("--")
-        .arg(format!("--static={mount_point}:/proc/self/exe"))
-        .arg(format!("--run={mount_point}/.venv/bin/python"))
-        .arg("--")
-        .arg("-m")
-        .arg(module)
+        .arg(format!("--static={mount_point}:/proc/self/exe"));
+
+    match entry_point {
+        // Run the interpreter on the module: .venv/bin/python -m <module>.
+        EntryPoint::Module(module) => {
+            cmd.arg(format!("--run={mount_point}/.venv/bin/python"))
+                .arg("--")
+                .arg("-m")
+                .arg(module);
+        }
+        // Run the console script directly: .venv/bin/<script>.
+        EntryPoint::Script(script) => {
+            cmd.arg(format!("--run={mount_point}/.venv/bin/{script}"));
+        }
+    }
+
+    let status = cmd
         .status()
         .context("failed to run fuselage-bundle — is it installed and on PATH?")?;
 
@@ -659,6 +761,46 @@ mod tests {
     }
 
     #[test]
+    fn parse_args_script_override() {
+        let tmp = TempDir::new().unwrap();
+        write_pyproject(tmp.path(), "x");
+        let raw = ss(&[
+            &format!("--project={}", tmp.path().display()),
+            "--output=/out",
+            "--script=greet",
+        ]);
+        let args = parse_args_from(&raw).unwrap();
+        assert_eq!(args.script.as_deref(), Some("greet"));
+    }
+
+    #[test]
+    fn parse_args_script_space_separated() {
+        let tmp = TempDir::new().unwrap();
+        write_pyproject(tmp.path(), "x");
+        let raw = ss(&[
+            &format!("--project={}", tmp.path().display()),
+            "--output=/out",
+            "--script",
+            "greet",
+        ]);
+        let args = parse_args_from(&raw).unwrap();
+        assert_eq!(args.script.as_deref(), Some("greet"));
+    }
+
+    #[test]
+    fn parse_args_module_and_script_are_mutually_exclusive() {
+        let tmp = TempDir::new().unwrap();
+        write_pyproject(tmp.path(), "x");
+        let raw = ss(&[
+            &format!("--project={}", tmp.path().display()),
+            "--output=/out",
+            "--module=mymod",
+            "--script=greet",
+        ]);
+        assert!(parse_args_from(&raw).is_err());
+    }
+
+    #[test]
     fn parse_args_uv_args_accumulated() {
         let tmp = TempDir::new().unwrap();
         write_pyproject(tmp.path(), "x");
@@ -789,6 +931,7 @@ mod tests {
             project: dir.to_path_buf(),
             output: PathBuf::from("/out"),
             module: None,
+            script: None,
             squashfs: None,
             extra_uv_args: vec![],
             dev: false,
@@ -847,6 +990,82 @@ mod tests {
         .unwrap();
         let args = args_with_project(tmp.path());
         assert!(resolve_package_name(&args).is_err());
+    }
+
+    // ── validate_script / resolve_entry_point ─────────────────────────────────
+
+    fn write_pyproject_with_scripts(dir: &Path, name: &str, scripts: &[(&str, &str)]) {
+        let mut content = format!("[project]\nname = \"{name}\"\n\n[project.scripts]\n");
+        for (k, v) in scripts {
+            content.push_str(&format!("{k} = \"{v}\"\n"));
+        }
+        std::fs::write(dir.join("pyproject.toml"), content).unwrap();
+    }
+
+    #[test]
+    fn validate_script_accepts_declared_script() {
+        let tmp = TempDir::new().unwrap();
+        write_pyproject_with_scripts(tmp.path(), "x", &[("greet", "x.cli:main")]);
+        assert!(validate_script(tmp.path(), "greet").is_ok());
+    }
+
+    #[test]
+    fn validate_script_rejects_undeclared_script() {
+        let tmp = TempDir::new().unwrap();
+        write_pyproject_with_scripts(tmp.path(), "x", &[("greet", "x.cli:main")]);
+        assert!(validate_script(tmp.path(), "nope").is_err());
+    }
+
+    #[test]
+    fn validate_script_rejects_when_no_scripts_section() {
+        let tmp = TempDir::new().unwrap();
+        write_pyproject(tmp.path(), "x");
+        assert!(validate_script(tmp.path(), "greet").is_err());
+    }
+
+    #[test]
+    fn validate_script_rejects_unsafe_name() {
+        let tmp = TempDir::new().unwrap();
+        write_pyproject_with_scripts(tmp.path(), "x", &[("greet", "x.cli:main")]);
+        // Path separators / traversal must be rejected before the lookup.
+        assert!(validate_script(tmp.path(), "../evil").is_err());
+        assert!(validate_script(tmp.path(), "a/b").is_err());
+        assert!(validate_script(tmp.path(), "").is_err());
+    }
+
+    #[test]
+    fn entry_point_defaults_to_module_on_package_name() {
+        let tmp = TempDir::new().unwrap();
+        write_pyproject(tmp.path(), "myapp");
+        let args = args_with_project(tmp.path());
+        match resolve_entry_point(&args, "myapp").unwrap() {
+            EntryPoint::Module(m) => assert_eq!(m, "myapp"),
+            EntryPoint::Script(_) => panic!("expected Module default"),
+        }
+    }
+
+    #[test]
+    fn entry_point_uses_module_override() {
+        let tmp = TempDir::new().unwrap();
+        write_pyproject(tmp.path(), "myapp");
+        let mut args = args_with_project(tmp.path());
+        args.module = Some("myapp.cli".to_owned());
+        match resolve_entry_point(&args, "myapp").unwrap() {
+            EntryPoint::Module(m) => assert_eq!(m, "myapp.cli"),
+            EntryPoint::Script(_) => panic!("expected Module"),
+        }
+    }
+
+    #[test]
+    fn entry_point_uses_validated_script() {
+        let tmp = TempDir::new().unwrap();
+        write_pyproject_with_scripts(tmp.path(), "myapp", &[("greet", "myapp.cli:main")]);
+        let mut args = args_with_project(tmp.path());
+        args.script = Some("greet".to_owned());
+        match resolve_entry_point(&args, "myapp").unwrap() {
+            EntryPoint::Script(s) => assert_eq!(s, "greet"),
+            EntryPoint::Module(_) => panic!("expected Script"),
+        }
     }
 
     // ── read_requires_python ──────────────────────────────────────────────────
