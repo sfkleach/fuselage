@@ -283,11 +283,14 @@ fn read_requires_python(project: &Path) -> Result<Option<String>> {
         .parse()
         .with_context(|| format!("failed to parse {}", pyproject.display()))?;
 
-    Ok(doc
-        .get("project")
-        .and_then(|p| p.get("requires-python"))
-        .and_then(|r| r.as_str())
-        .map(|s| s.to_owned()))
+    match doc.get("project").and_then(|p| p.get("requires-python")) {
+        None => Ok(None),
+        Some(toml::Value::String(s)) => Ok(Some(s.to_owned())),
+        Some(_) => anyhow::bail!(
+            "{}: [project].requires-python must be a string",
+            pyproject.display()
+        ),
+    }
 }
 
 /// Locate the system Python (the interpreter `uv sync` will use under

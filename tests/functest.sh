@@ -489,12 +489,15 @@ PYPROJ
 
         # Without --ignore-version-mismatch the build must fail, and the error
         # must come from our version check (not a later uv sync failure).
+        badpy_status=0
         badpy_out="$(env "PATH=$FUSELAGE_DIR:$PATH" "$UV_BUNDLE" \
             --project="$BADPROJ" \
             --module=platform \
             --uv-arg=--no-install-project \
-            --output="$WORKDIR/uvbundle-badpy-out" 2>&1 || true)"
-        if grep -q "does not satisfy" <<<"$badpy_out"; then
+            --output="$WORKDIR/uvbundle-badpy-out" 2>&1)" || badpy_status=$?
+        if [[ $badpy_status -ne 0 ]] \
+            && grep -q "Install a compatible Python, or pass --ignore-version-mismatch to build anyway." <<<"$badpy_out" \
+            && ! grep -q "continuing because --ignore-version-mismatch" <<<"$badpy_out"; then
             pass "uv-bundle: incompatible requires-python is rejected by the version check"
         else
             fail "uv-bundle: incompatible requires-python not rejected as expected (got: $badpy_out)"
@@ -511,7 +514,8 @@ PYPROJ
             --uv-arg=--no-install-project \
             --ignore-version-mismatch \
             --output="$WORKDIR/uvbundle-ignore-out" 2>&1 || true)"
-        if grep -q "continuing because --ignore-version-mismatch" <<<"$ignore_out"; then
+        if grep -q "continuing because --ignore-version-mismatch" <<<"$ignore_out" \
+            && ! grep -q "Install a compatible Python, or pass --ignore-version-mismatch to build anyway." <<<"$ignore_out"; then
             pass "uv-bundle: --ignore-version-mismatch downgrades the check to a warning"
         else
             fail "uv-bundle: --ignore-version-mismatch did not downgrade the check (got: $ignore_out)"
