@@ -92,6 +92,32 @@ The resulting `myapp` binary locates `fuselage` on `PATH`, mounts its own embedd
 squashfs at `/run/fuselage/myapp`, and runs the Python module. Pass `--keep` to
 retain the intermediate build directory for inspection.
 
+## uv-bundle
+
+`uv-bundle` packs a [uv](https://docs.astral.sh/uv/)-managed Python project into a
+single self-executing ELF binary, running the whole pipeline for you: it creates a
+private tmpfs with `fuselage --dynamic-empty`, installs the project's dependencies
+into it with `uv sync`, compresses it with `mksquashfs`, and packs the result with
+`fuselage-bundle`.
+
+```bash
+uv-bundle --project=./myapp --output=myapp
+```
+
+The module to run is read from `pyproject.toml` (override with `--module=MOD`).
+Other options: `--dev` (include dev dependencies), `--squashfs=PATH` (keep the
+intermediate squashfs), `--uv-arg=ARG` (forward an argument to `uv sync`,
+repeatable), and `--verbose` (print the squashfs tree and sizes).
+
+`uv-bundle` always builds against the **system** Python (it sets
+`UV_PYTHON_PREFERENCE=system`), not a uv-managed download, so the bundled venv
+references a stable interpreter path rather than one under the build user's home
+directory. Before building, the system Python is checked against
+`[project].requires-python`; a mismatch is an error unless
+`--ignore-version-mismatch` is given.
+
+Requires `fuselage` (setuid), `fuselage-bundle`, `uv`, `mksquashfs`, and `gcc`.
+
 ## Privilege model
 
 ### setuid-root mode

@@ -473,6 +473,49 @@ PYPROJ
         # rather than any version that may be installed system-wide.
         check "uv-bundle: self-executing binary runs python -m platform" \
             env "PATH=$FUSELAGE_DIR:$PATH" "$WORKDIR/uvbundle-out"
+
+        # ── requires-python version check ─────────────────────────────────────
+        # A project demanding an impossible Python version must be rejected by
+        # uv-bundle's own check before any build work.  '>=99.0' cannot be
+        # satisfied by any system Python, so this is stable across machines.
+        BADPROJ="$WORKDIR/uvbundle-badpython"
+        mkdir -p "$BADPROJ"
+        cat > "$BADPROJ/pyproject.toml" <<'PYPROJ'
+[project]
+name = "uvbundlebadpy"
+version = "0.1.0"
+requires-python = ">=99.0"
+PYPROJ
+
+        # Without --ignore-version-mismatch the build must fail, and the error
+        # must come from our version check (not a later uv sync failure).
+        badpy_out="$(env "PATH=$FUSELAGE_DIR:$PATH" "$UV_BUNDLE" \
+            --project="$BADPROJ" \
+            --module=platform \
+            --uv-arg=--no-install-project \
+            --output="$WORKDIR/uvbundle-badpy-out" 2>&1 || true)"
+        if grep -q "does not satisfy" <<<"$badpy_out"; then
+            pass "uv-bundle: incompatible requires-python is rejected by the version check"
+        else
+            fail "uv-bundle: incompatible requires-python not rejected as expected (got: $badpy_out)"
+        fi
+
+        # With --ignore-version-mismatch the version check is downgraded to a
+        # warning, so the build proceeds past it (and then fails later at uv
+        # sync, which cannot find Python 99 — that is expected and not our
+        # concern here).  Assert the warning appears and the hard check error
+        # does not.
+        ignore_out="$(env "PATH=$FUSELAGE_DIR:$PATH" "$UV_BUNDLE" \
+            --project="$BADPROJ" \
+            --module=platform \
+            --uv-arg=--no-install-project \
+            --ignore-version-mismatch \
+            --output="$WORKDIR/uvbundle-ignore-out" 2>&1 || true)"
+        if grep -q "continuing because --ignore-version-mismatch" <<<"$ignore_out"; then
+            pass "uv-bundle: --ignore-version-mismatch downgrades the check to a warning"
+        else
+            fail "uv-bundle: --ignore-version-mismatch did not downgrade the check (got: $ignore_out)"
+        fi
     else
         fail "uv-bundle: pipeline failed to build bundle"
     fi
