@@ -11,8 +11,10 @@ Following the style in https://keepachangelog.com/en/1.0.0/
   pipeline end to end: `fuselage --dynamic-empty` creates a private tmpfs at a
   fixed path, `uv sync` installs the project's dependencies into it, `mksquashfs`
   compresses the result, and `fuselage-bundle` packs the archive into the output
-  binary. The module to run is read from `pyproject.toml` (overridable with
-  `--module`). Supports `--dev` (include dev dependencies; defaults to `--no-dev`),
+  binary. By default it runs `python -m <package>` (override the module with
+  `--module`); `--script=NAME` instead runs a `[project.scripts]` console script
+  directly from `.venv/bin/` (mutually exclusive with `--module`, and validated
+  against `pyproject.toml`). Supports `--dev` (include dev dependencies; defaults to `--no-dev`),
   `--squashfs=PATH` (retain the intermediate squashfs), `--uv-arg=ARG` (forward
   extra arguments to `uv sync`, repeatable), and `--verbose` (trace the build and
   print the squashfs tree and file sizes). Requires `fuselage` (setuid),

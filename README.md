@@ -104,7 +104,16 @@ into it with `uv sync`, compresses it with `mksquashfs`, and packs the result wi
 uv-bundle --project=./myapp --output=myapp
 ```
 
-The module to run is read from `pyproject.toml` (override with `--module=MOD`).
+By default the bundle runs `python -m <package>`, where the package name is read
+from `pyproject.toml` (override the module with `--module=MOD`). To run a
+[`[project.scripts]`](https://packaging.python.org/en/latest/specifications/entry-points/)
+console script directly instead, use `--script=NAME`; it runs `.venv/bin/NAME`
+rather than `python -m`, and is mutually exclusive with `--module`:
+
+```bash
+uv-bundle --project=./myapp --script=greet --output=greet
+```
+
 Other options: `--dev` (include dev dependencies), `--squashfs=PATH` (keep the
 intermediate squashfs), `--uv-arg=ARG` (forward an argument to `uv sync`,
 repeatable), and `--verbose` (print the squashfs tree and sizes).
