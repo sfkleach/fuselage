@@ -220,15 +220,12 @@ fn compile_stub(src: &Path, dest: &Path) -> Result<()> {
         "gcc"
     };
 
+    // Pass the paths as OsStr (Command::arg accepts them directly) rather than
+    // converting via to_str().unwrap(), which would panic on non-UTF-8 paths.
     let status = Command::new(compiler)
-        .args([
-            "-static",
-            "-O2",
-            "-s",
-            "-o",
-            dest.to_str().unwrap(),
-            src.to_str().unwrap(),
-        ])
+        .args(["-static", "-O2", "-s", "-o"])
+        .arg(dest)
+        .arg(src)
         .status()
         .with_context(|| format!("failed to run {compiler} — is it installed?"))?;
 
