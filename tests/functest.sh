@@ -526,13 +526,12 @@ PYPROJ
         # a module.  The fixture is copied into the work dir first so the build
         # (uv sync, .venv, *.egg-info) does not write artefacts into the repo.
         HELLO_SRC="$(dirname "$0")/hello"
-        HELLO_PROJ="$WORKDIR/uvbundle-hello"
         if [[ -f "$HELLO_SRC/pyproject.toml" ]]; then
-            rm -rf "$HELLO_PROJ"
-            cp -r "$HELLO_SRC" "$HELLO_PROJ"
+            rm -rf "$WORKDIR/uvbundle-hello"
+            cp -r "$HELLO_SRC" "$WORKDIR/uvbundle-hello"
 
             if env "PATH=$FUSELAGE_DIR:$PATH" "$UV_BUNDLE" \
-                    --project="$HELLO_PROJ" \
+                    --project="$WORKDIR/uvbundle-hello" \
                     --script=hello \
                     --output="$WORKDIR/uvbundle-script-out" \
                     >/dev/null 2>&1; then
@@ -546,7 +545,7 @@ PYPROJ
 
             # An undeclared script name must be rejected before any build work.
             script_err="$(env "PATH=$FUSELAGE_DIR:$PATH" "$UV_BUNDLE" \
-                --project="$HELLO_PROJ" \
+                --project="$WORKDIR/uvbundle-hello" \
                 --script=does-not-exist \
                 --output="$WORKDIR/uvbundle-script-bad" 2>&1 || true)"
             if grep -q "is not in \[project.scripts\]" <<<"$script_err"; then
