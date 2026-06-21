@@ -91,15 +91,16 @@ tar -xzf "${TMPDIR}/${ARCHIVE}" -C "$TMPDIR"
 mkdir -p "$INSTALL_DIR"
 cp "${TMPDIR}/fuselage" "${INSTALL_DIR}/fuselage"
 cp "${TMPDIR}/fuselage-bundle" "${INSTALL_DIR}/fuselage-bundle"
-chmod 755 "${INSTALL_DIR}/fuselage" "${INSTALL_DIR}/fuselage-bundle"
+cp "${TMPDIR}/uv-bundle" "${INSTALL_DIR}/uv-bundle"
+chmod 755 "${INSTALL_DIR}/fuselage" "${INSTALL_DIR}/fuselage-bundle" "${INSTALL_DIR}/uv-bundle"
 
 if [ "$SETUID" = "1" ]; then
     echo "Setting setuid-root on ${INSTALL_DIR}/fuselage (requires sudo)..."
     sudo chown root:root "${INSTALL_DIR}/fuselage"
     sudo chmod u+s "${INSTALL_DIR}/fuselage"
-    echo "Done. fuselage and fuselage-bundle installed to ${INSTALL_DIR} (fuselage setuid-root)."
+    echo "Done. fuselage, fuselage-bundle, and uv-bundle installed to ${INSTALL_DIR} (fuselage setuid-root)."
 else
-    echo "Done. fuselage and fuselage-bundle installed to ${INSTALL_DIR}."
+    echo "Done. fuselage, fuselage-bundle, and uv-bundle installed to ${INSTALL_DIR}."
     echo "Note: running without setuid-root — UID remapping will be used."
     echo "      Re-run with FUSELAGE_SETUID=1 to install setuid-root."
 fi

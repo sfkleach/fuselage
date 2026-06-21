@@ -208,24 +208,52 @@ fn c_string_literal(s: &str) -> String {
     out
 }
 
-/// Compile `src` with gcc into a statically linked binary at `dest`.
+/// Compile `src` into a statically linked binary at `dest`.
+///
+/// Prefers musl-gcc when available: musl produces stripped static binaries of
+/// ~50 KB versus ~700 KB for glibc, because musl was designed for efficient
+/// static linking. Falls back to plain gcc if musl-gcc is not on PATH.
 fn compile_stub(src: &Path, dest: &Path) -> Result<()> {
-    let status = Command::new("gcc")
-        .args([
-            "-static",
-            "-O2",
-            "-o",
-            dest.to_str().unwrap(),
-            src.to_str().unwrap(),
-        ])
+    let compiler = if which_compiler("musl-gcc") {
+        "musl-gcc"
+    } else {
+        "gcc"
+    };
+
+    // Pass the paths as OsStr (Command::arg accepts them directly) rather than
+    // converting via to_str().unwrap(), which would panic on non-UTF-8 paths.
+    let status = Command::new(compiler)
+        .args(["-static", "-O2", "-s", "-o"])
+        .arg(dest)
+        .arg(src)
         .status()
-        .context("failed to run gcc — is gcc installed?")?;
+        .with_context(|| format!("failed to run {compiler} — is it installed?"))?;
 
     if !status.success() {
-        anyhow::bail!("gcc failed to compile {}", src.display());
+        anyhow::bail!("{compiler} failed to compile {}", src.display());
     }
 
     Ok(())
+}
+
+/// Return true if `name` resolves to an executable file on PATH.
+///
+/// The executable-bit check matters here: a regular file named `musl-gcc` that
+/// is not executable would otherwise be selected, and the failure would surface
+/// later as a confusing "permission denied" when `compile_stub` tries to run it,
+/// rather than falling back cleanly to gcc.
+fn which_compiler(name: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::env::var_os("PATH")
+        .map(|path| {
+            std::env::split_paths(&path).any(|dir| {
+                let candidate = dir.join(name);
+                std::fs::metadata(&candidate)
+                    .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// Assemble the output binary: stub ELF + zero padding to 4096-byte alignment

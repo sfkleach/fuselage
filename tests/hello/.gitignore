@@ -1,0 +1,5 @@
+# Local artefact rule scoped to this fixture. `build/` is a generic name, so it
+# is ignored here rather than in the root .gitignore (where it could collide
+# with a legitimately tracked folder elsewhere). The Python-specific artefacts
+# this fixture produces (.venv, *.egg-info, __pycache__) are covered at the root.
+/build/

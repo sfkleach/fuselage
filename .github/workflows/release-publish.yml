@@ -1,8 +1,16 @@
 name: Release Publish
 
-# Manually triggered after release-draft.yml has completed and the draft
-# release on GitHub has been reviewed and confirmed to look correct.
-# Only stable tags (vX.Y.Z with no suffix) are accepted.
+# Stage 2 of the two-stage release process. Manually triggered (workflow_dispatch,
+# normally via `just publish-release vX.Y.Z`) after release-draft.yml has run and
+# the draft release on GitHub has been reviewed and confirmed to look correct.
+#
+# It performs the two irreversible, public-facing steps: it flips the GitHub
+# release from draft to published, and it runs `cargo publish` to push the crate
+# to crates.io. Because both are public and effectively permanent, this stage is
+# deliberately separate from stage 1 and is never triggered automatically.
+#
+# Only stable tags (vX.Y.Z with no suffix) are accepted; pre-releases (e.g. -rc1)
+# are intentionally rejected so they cannot be published to crates.io.
 on:
   workflow_dispatch:
     inputs:

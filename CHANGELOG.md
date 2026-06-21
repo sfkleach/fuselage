@@ -2,6 +2,27 @@
 
 Following the style in https://keepachangelog.com/en/1.0.0/
 
+## Unreleased
+
+### Added
+
+- `uv-bundle`: new companion tool that packs a [uv](https://docs.astral.sh/uv/)-managed
+  Python project into a single self-executing ELF binary. It runs the full
+  pipeline end to end: `fuselage --dynamic-empty` creates a private tmpfs at a
+  fixed path, `uv sync` installs the project's dependencies into it, `mksquashfs`
+  compresses the result, and `fuselage-bundle` packs the archive into the output
+  binary. The module to run is read from `pyproject.toml` (overridable with
+  `--module`). Supports `--dev` (include dev dependencies; defaults to `--no-dev`),
+  `--squashfs=PATH` (retain the intermediate squashfs), `--uv-arg=ARG` (forward
+  extra arguments to `uv sync`, repeatable), and `--verbose` (trace the build and
+  print the squashfs tree and file sizes). Requires `fuselage` (setuid),
+  `fuselage-bundle`, `uv`, `mksquashfs`, and `gcc`.
+- `uv-bundle` is now included in pre-built release tarballs and installed by
+  `install.sh` alongside `fuselage` and `fuselage-bundle`.
+- `just setuid-sysinstall` recipe: builds release binaries and copies `fuselage`,
+  `fuselage-bundle`, and `uv-bundle` to `/usr/local/bin`, making `fuselage`
+  setuid-root. Use this on shared machines or when `$HOME` is mounted `nosuid`.
+
 ## v0.3.0, Bundling and fixed-path mounts 2026-06-13
 
 ### Added
