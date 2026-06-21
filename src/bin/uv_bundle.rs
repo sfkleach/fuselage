@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
+use pep440_rs::{Version, VersionSpecifiers};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::str::FromStr;
 
 fn main() -> Result<()> {
     let args = parse_args()?;
@@ -19,6 +21,8 @@ struct Args {
     extra_uv_args: Vec<String>,
     /// Include dev dependencies in the bundle. Defaults to false (--no-dev).
     dev: bool,
+    /// Downgrade a system-Python/requires-python mismatch from an error to a warning.
+    ignore_version_mismatch: bool,
     /// Trace the bundling process: list squashfs contents and print sizes.
     verbose: bool,
 }
@@ -49,8 +53,17 @@ Options:
   --squashfs=PATH     Retain the intermediate squashfs at PATH instead of a
                       temporary file.
   --uv-arg=ARG        Extra argument forwarded to 'uv sync' (repeatable).
+  --ignore-version-mismatch
+                      Continue with a warning (rather than failing) when the
+                      system Python does not satisfy [project].requires-python.
   --verbose           Trace bundling: print squashfs tree and file sizes.
   --help              Show this message and exit.
+
+uv-bundle always builds against the system Python (UV_PYTHON_PREFERENCE=system),
+not a uv-managed download, so the bundled venv references a stable interpreter
+path rather than one under the build user's home directory. Before building, the
+system Python is checked against [project].requires-python; a mismatch is an
+error unless --ignore-version-mismatch is given.
 
 The pipeline runs four steps in order:
   1. fuselage --dynamic-empty creates a private tmpfs at /run/fuselage/<name>.
@@ -79,6 +92,7 @@ fn parse_args_from(raw: &[String]) -> Result<Args> {
     let mut squashfs: Option<PathBuf> = None;
     let mut extra_uv_args: Vec<String> = Vec::new();
     let mut dev = false;
+    let mut ignore_version_mismatch = false;
     let mut verbose = false;
 
     let mut i = 0;
@@ -116,6 +130,8 @@ fn parse_args_from(raw: &[String]) -> Result<Args> {
             extra_uv_args.push(val.clone());
         } else if arg == "--dev" {
             dev = true;
+        } else if arg == "--ignore-version-mismatch" {
+            ignore_version_mismatch = true;
         } else if arg == "--verbose" {
             verbose = true;
         } else {
@@ -138,6 +154,7 @@ fn parse_args_from(raw: &[String]) -> Result<Args> {
         squashfs,
         extra_uv_args,
         dev,
+        ignore_version_mismatch,
         verbose,
     })
 }
@@ -146,6 +163,11 @@ fn run(args: &Args) -> Result<()> {
     let package_name = resolve_package_name(args)?;
     let module = args.module.as_deref().unwrap_or(&package_name).to_owned();
     let mount_point = format!("/run/fuselage/{package_name}");
+
+    // Check the system Python against requires-python before doing any work, so
+    // a mismatch fails fast rather than after building a venv that uv would pin
+    // to an unexpected interpreter.
+    check_system_python(args)?;
 
     // Squashfs is written outside the mount so it survives after fuselage exits.
     let squashfs_owned;
@@ -249,6 +271,108 @@ fn resolve_package_name(args: &Args) -> Result<String> {
     Ok(normalised)
 }
 
+/// Read the optional `[project].requires-python` constraint from `pyproject.toml`.
+///
+/// Returns `None` when the field is absent (no constraint to check against).
+fn read_requires_python(project: &Path) -> Result<Option<String>> {
+    let pyproject = project.join("pyproject.toml");
+    let content = std::fs::read_to_string(&pyproject)
+        .with_context(|| format!("failed to read {}", pyproject.display()))?;
+
+    let doc: toml::Value = content
+        .parse()
+        .with_context(|| format!("failed to parse {}", pyproject.display()))?;
+
+    Ok(doc
+        .get("project")
+        .and_then(|p| p.get("requires-python"))
+        .and_then(|r| r.as_str())
+        .map(|s| s.to_owned()))
+}
+
+/// Locate the system Python (the interpreter `uv sync` will use under
+/// UV_PYTHON_PREFERENCE=system) and return its version as `major.minor.micro`.
+///
+/// We ask uv itself (`uv python find --system`) so the version we check is the
+/// exact interpreter uv will select, rather than whatever `python3` on PATH
+/// happens to be — the two can differ.
+fn system_python_version() -> Result<Version> {
+    let find = Command::new("uv")
+        .args(["python", "find", "--system"])
+        .output()
+        .context("failed to run 'uv python find --system' — is uv installed and on PATH?")?;
+
+    if !find.status.success() {
+        anyhow::bail!(
+            "uv could not find a system Python (UV_PYTHON_PREFERENCE=system): {}",
+            String::from_utf8_lossy(&find.stderr).trim()
+        );
+    }
+
+    let interpreter = String::from_utf8(find.stdout)
+        .context("'uv python find --system' produced non-UTF-8 output")?
+        .trim()
+        .to_owned();
+
+    // Ask the interpreter for its own version in a parseable form rather than
+    // scraping `python --version`, whose format has varied historically.
+    let ver = Command::new(&interpreter)
+        .args(["-c", "import sys; print('%d.%d.%d' % sys.version_info[:3])"])
+        .output()
+        .with_context(|| format!("failed to run system Python at {interpreter}"))?;
+
+    if !ver.status.success() {
+        anyhow::bail!(
+            "system Python at {interpreter} failed to report its version: {}",
+            String::from_utf8_lossy(&ver.stderr).trim()
+        );
+    }
+
+    let version_str = String::from_utf8(ver.stdout)
+        .context("system Python produced non-UTF-8 version output")?
+        .trim()
+        .to_owned();
+
+    Version::from_str(&version_str)
+        .with_context(|| format!("could not parse system Python version {version_str:?}"))
+}
+
+/// Verify the system Python satisfies `[project].requires-python`.
+///
+/// A mismatch is an error by default; with `--ignore-version-mismatch` it is
+/// downgraded to a warning so the caller can build anyway (e.g. when they know
+/// the target machine differs from the build machine).
+fn check_system_python(args: &Args) -> Result<()> {
+    let requires = match read_requires_python(&args.project)? {
+        Some(r) => r,
+        // No constraint declared: nothing to check.
+        None => return Ok(()),
+    };
+
+    let specifiers = VersionSpecifiers::from_str(&requires).with_context(|| {
+        format!("could not parse [project].requires-python {requires:?} as a PEP 440 specifier")
+    })?;
+
+    let version = system_python_version()?;
+
+    if specifiers.contains(&version) {
+        return Ok(());
+    }
+
+    if args.ignore_version_mismatch {
+        eprintln!(
+            "uv-bundle: warning: system Python {version} does not satisfy \
+             requires-python {requires:?}; continuing because --ignore-version-mismatch was given"
+        );
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "system Python {version} does not satisfy [project].requires-python {requires:?}.\n\
+             Install a compatible Python, or pass --ignore-version-mismatch to build anyway."
+        )
+    }
+}
+
 /// Wrap a string in single quotes, escaping any embedded single quotes.
 ///
 /// This is the standard POSIX shell quoting transform: a single quote inside
@@ -288,8 +412,12 @@ fn run_mount_sync_compress(
 
     // uv sync installs into the mount via UV_PROJECT_ENVIRONMENT so the venv
     // ends up inside the squashfs rather than alongside the source tree.
+    // UV_PYTHON_PREFERENCE=system forces the system Python rather than a
+    // uv-managed download, so the bundled venv references a stable interpreter
+    // path instead of one under the build user's home directory.
     let sh_cmd = format!(
-        "UV_PROJECT_ENVIRONMENT={} uv sync --project {} {} && mksquashfs {} {} -noappend -quiet",
+        "UV_PYTHON_PREFERENCE=system UV_PROJECT_ENVIRONMENT={} \
+         uv sync --project {} {} && mksquashfs {} {} -noappend -quiet",
         shell_quote(&format!("{mount_point}/.venv")),
         shell_quote(project_str),
         uv_flags_str,
@@ -661,6 +789,7 @@ mod tests {
             squashfs: None,
             extra_uv_args: vec![],
             dev: false,
+            ignore_version_mismatch: false,
             verbose: false,
         }
     }
@@ -715,5 +844,65 @@ mod tests {
         .unwrap();
         let args = args_with_project(tmp.path());
         assert!(resolve_package_name(&args).is_err());
+    }
+
+    // ── read_requires_python ──────────────────────────────────────────────────
+
+    #[test]
+    fn requires_python_present() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("pyproject.toml"),
+            "[project]\nname=\"x\"\nrequires-python=\">=3.9\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            read_requires_python(tmp.path()).unwrap(),
+            Some(">=3.9".to_owned())
+        );
+    }
+
+    #[test]
+    fn requires_python_absent_is_none() {
+        let tmp = TempDir::new().unwrap();
+        write_pyproject(tmp.path(), "x");
+        assert_eq!(read_requires_python(tmp.path()).unwrap(), None);
+    }
+
+    // ── PEP 440 specifier matching (the logic check_system_python relies on) ───
+    //
+    // These pin the containment behaviour we depend on, including the tricky
+    // cases (~=, !=.*, exclusive bounds) that a hand-rolled comparison would
+    // likely get wrong.
+
+    fn satisfies(spec: &str, version: &str) -> bool {
+        VersionSpecifiers::from_str(spec)
+            .unwrap()
+            .contains(&Version::from_str(version).unwrap())
+    }
+
+    #[test]
+    fn specifier_lower_bound() {
+        assert!(satisfies(">=3.9", "3.12.0"));
+        assert!(!satisfies(">=3.9", "3.8.10"));
+    }
+
+    #[test]
+    fn specifier_range() {
+        assert!(satisfies(">=3.9,<3.13", "3.12.5"));
+        assert!(!satisfies(">=3.9,<3.13", "3.13.0"));
+    }
+
+    #[test]
+    fn specifier_compatible_release() {
+        assert!(satisfies("~=3.11", "3.11.4"));
+        assert!(satisfies("~=3.11", "3.99.0"));
+        assert!(!satisfies("~=3.11.0", "3.12.0"));
+    }
+
+    #[test]
+    fn specifier_exclusion() {
+        assert!(!satisfies("!=3.10.*", "3.10.4"));
+        assert!(satisfies("!=3.10.*", "3.11.0"));
     }
 }
