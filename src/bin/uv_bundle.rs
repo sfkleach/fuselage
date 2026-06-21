@@ -222,8 +222,31 @@ fn resolve_package_name(args: &Args) -> Result<String> {
         .and_then(|n| n.as_str())
         .with_context(|| format!("{}: missing [project].name", pyproject.display()))?;
 
-    // PEP 625 normalisation: hyphens and dots become underscores in the importable name.
-    Ok(name.replace(['-', '.'], "_"))
+    // Convert the distribution name to its importable form: hyphens and dots
+    // become underscores (e.g. "my-pkg" -> "my_pkg").
+    let normalised = name.replace(['-', '.'], "_");
+
+    // The normalised name is used both as a single path component under
+    // /run/fuselage/ and, via that mount point, in a baked-in
+    // --static=/run/fuselage/<name>:/proc/self/exe argument. A name containing
+    // ':' would make fuselage mis-parse the NAME:FILE split, and one containing
+    // '/' (or "."/"..", or empty) would not be a valid single path component.
+    // Reject these early with a clear error rather than emit a broken bundle.
+    if normalised.is_empty()
+        || normalised == "."
+        || normalised == ".."
+        || normalised.contains([':', '/'])
+    {
+        anyhow::bail!(
+            "{}: [project].name {:?} normalises to {:?}, which is not a usable mount name \
+             (must be a single path component with no ':' or '/')",
+            pyproject.display(),
+            name,
+            normalised
+        );
+    }
+
+    Ok(normalised)
 }
 
 /// Wrap a string in single quotes, escaping any embedded single quotes.
