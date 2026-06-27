@@ -423,7 +423,15 @@ fn main() -> Result<()> {
     let drop_to = is_setuid.then_some((ruid, rgid));
 
     let fixed_paths = fixed_mount_paths(&dynamic_specs, &empty_specs, &static_specs);
-    run_with_cleanup(&prog, &argv, &pd, drop_to, &cache_dir, fixed_paths, use_extract_mode)
+    run_with_cleanup(
+        &prog,
+        &argv,
+        &pd,
+        drop_to,
+        &cache_dir,
+        fixed_paths,
+        use_extract_mode,
+    )
 }
 
 /// Resolve the destination path for a mount, using the fixed path directly
