@@ -423,7 +423,7 @@ fn main() -> Result<()> {
     let drop_to = is_setuid.then_some((ruid, rgid));
 
     let fixed_paths = fixed_mount_paths(&dynamic_specs, &empty_specs, &static_specs);
-    run_with_cleanup(&prog, &argv, &pd, drop_to, &cache_dir, fixed_paths)
+    run_with_cleanup(&prog, &argv, &pd, drop_to, &cache_dir, fixed_paths, use_extract_mode)
 }
 
 /// Resolve the destination path for a mount, using the fixed path directly
@@ -620,6 +620,7 @@ fn run_with_cleanup(
     drop_to: Option<(Uid, Gid)>,
     cache_dir: &Path,
     fixed_paths: Vec<PathBuf>,
+    use_extract_mode: bool,
 ) -> Result<()> {
     use nix::sys::wait::{WaitStatus, waitpid};
     use nix::unistd::{ForkResult, fork};
@@ -647,7 +648,7 @@ fn run_with_cleanup(
         }
         ForkResult::Parent { child } => {
             let status = waitpid(child, None).context("waitpid failed")?;
-            procdir::cleanup_procdir(procdir);
+            procdir::cleanup_procdir(procdir, use_extract_mode);
             // Best-effort cleanup of fixed-path mounts; failures are silent because
             // another concurrent fuselage invocation may still have the path mounted.
             for path in &fixed_paths {

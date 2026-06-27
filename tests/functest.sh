@@ -292,6 +292,16 @@ check_output "--extract=deny behaves as default" "hello from archive" \
     "$FUSELAGE" --extract=deny --dynamic="$WORKDIR/data.zip" \
         -- sh -c 'cat "$FUSELAGE_DYNAMIC/data/hello.txt"'
 
+# Verify that the procdir is fully removed on exit even when extracted content
+# includes read-only directories (mode 0555) and files (mode 0444).  Capture
+# the procdir path during the run, then assert it no longer exists afterwards.
+_procdir=$(
+    "$FUSELAGE" --extract=force --static="$WORKDIR/rodir.zip" \
+        -- sh -c 'dirname "$FUSELAGE_TMPDIR"'
+)
+check "--extract=force cleans up read-only extracted content on exit" \
+    test -n "$_procdir" -a ! -e "$_procdir"
+
 echo ""
 
 # ── Test group: error cases ───────────────────────────────────────────────────

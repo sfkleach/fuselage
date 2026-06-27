@@ -55,12 +55,6 @@ functest-debug:
     cargo build
     bash tests/functest.sh target/debug/fuselage plain
 
-functest-debug-run:
-    bash tests/functest.sh target/debug/fuselage plain
-
-functest-setuid-run:
-    bash tests/functest.sh target/release/fuselage setuid
-
 functest-setuid:
     #!/usr/bin/env bash
     set -euo pipefail

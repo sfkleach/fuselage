@@ -227,12 +227,22 @@ pub fn copy_dir_recursively(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Lazily unmount the tmpfs and remove the now-empty procdir.
+/// Remove the procdir and all its contents on exit.
 ///
-/// Errors are silently ignored since this is best-effort cleanup.
-pub fn cleanup_procdir(procdir: &Path) {
-    let _ = umount2(procdir, MntFlags::MNT_DETACH);
-    let _ = fs::remove_dir(procdir);
+/// In namespace mode the procdir has a tmpfs overlaid on it: detach that first,
+/// then remove the now-empty underlying directory. In extract-and-run mode there
+/// is no tmpfs, so the procdir contains real extracted files that must be removed
+/// recursively; directories may have been extracted with read-only permissions, so
+/// the tree is made writable before removal. Errors are silently ignored since this
+/// is best-effort cleanup.
+pub fn cleanup_procdir(procdir: &Path, use_extract_mode: bool) {
+    if use_extract_mode {
+        make_dir_tree_writable(procdir);
+        let _ = fs::remove_dir_all(procdir);
+    } else {
+        let _ = umount2(procdir, MntFlags::MNT_DETACH);
+        let _ = fs::remove_dir(procdir);
+    }
 }
 
 /// Touch a cache sentinel file to record the current time as last-use time.
