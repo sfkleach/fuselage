@@ -57,7 +57,21 @@ else
     echo "    You may need to restart your shell or run: source \$HOME/.local/bin/env"
 fi
 
+# podman: optional; only needed for container tests (tests/conttest.sh).
+if command -v podman >/dev/null 2>&1; then
+    echo "==> podman already installed ($(podman --version))."
+else
+    echo "==> Installing podman (optional; needed only for container tests)..."
+    sudo apt-get install -y podman
+    echo "==> podman installed."
+    echo "    Pull the default container test image when ready:"
+    echo "      podman pull ubuntu:22.04"
+fi
+
 echo ""
 echo "All prerequisites installed. You can now build with:"
 echo "  cargo build --release"
 echo "  just test"
+echo ""
+echo "Optional: to run container tests (tests/conttest.sh), ensure the test image"
+echo "is available locally: podman pull ubuntu:22.04"

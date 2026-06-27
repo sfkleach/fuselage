@@ -292,6 +292,20 @@ check_output "--extract=deny behaves as default" "hello from archive" \
     "$FUSELAGE" --extract=deny --dynamic="$WORKDIR/data.zip" \
         -- sh -c 'cat "$FUSELAGE_DYNAMIC/data/hello.txt"'
 
+# --extract=prefer uses extract mode when unprivileged (no user namespace),
+# so dynamic content is accessible and static is NOT read-only.
+check_output "--extract=prefer dynamic content readable" "hello from archive" \
+    "$FUSELAGE" --extract=prefer --dynamic="$WORKDIR/data.zip" \
+        -- sh -c 'cat "$FUSELAGE_DYNAMIC/data/hello.txt"'
+
+if [[ "$MODE" == "setuid" ]]; then
+    # In setuid mode --extract=prefer uses a plain mount namespace (no UID
+    # remapping), so static archives ARE read-only — same as normal mode.
+    check "--extract=prefer static is read-only in setuid mode" \
+        "$FUSELAGE" --extract=prefer --static="$WORKDIR/data.zip" -- \
+            sh -c '! touch "$FUSELAGE_STATIC/data/probe" 2>/dev/null'
+fi
+
 # Verify that the procdir is fully removed on exit even when extracted content
 # includes read-only directories (mode 0555) and files (mode 0444).  Capture
 # the procdir path during the run, then assert it no longer exists afterwards.

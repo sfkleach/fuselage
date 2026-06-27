@@ -9,10 +9,12 @@ Following the style in https://keepachangelog.com/en/1.0.0/
 - `--extract=POLICY` flag: controls whether extract-and-run mode is used.
   `deny` (default) preserves current behaviour and fails if a namespace cannot
   be created. `allow` falls back to extract-and-run automatically when
-  `unshare(2)` fails, emitting a warning. `force` always skips namespace
-  creation. Extract-and-run mode requires no `CAP_SYS_ADMIN`, no loop devices,
-  and no `unshare` support, making fuselage usable in locked-down containers
-  where unprivileged user namespaces are disabled.
+  `unshare(2)` fails, emitting a warning. `prefer` uses extract-and-run in
+  unprivileged mode (avoiding user-namespace UID remapping) but uses a plain
+  mount namespace in setuid/root mode. `force` always skips namespace creation.
+  Extract-and-run mode requires no `CAP_SYS_ADMIN`, no loop devices, and no
+  `unshare` support, making fuselage usable in locked-down containers where
+  unprivileged user namespaces are disabled.
 
   **Known limitation:** `--static` archives are not enforced read-only in this
   mode. The kernel's bind-remount-ro cannot be applied without a mount

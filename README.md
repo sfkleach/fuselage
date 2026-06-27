@@ -29,7 +29,7 @@ fuselage [OPTIONS...] --run PATH [ARG...]
 | `--static=[NAME:]FILE` | Mount or extract `FILE` into a read-only directory at `$FUSELAGE_STATIC/NAME/` |
 | `--cache-static` | Convert zip `--static` archives to squashfs for faster subsequent runs (requires `mksquashfs`) |
 | `--run PATH` | Find `PATH` in extracted archives and execute it |
-| `--extract=POLICY` | `deny` (default) / `allow` / `force` — controls use of namespace-free extract-and-run mode |
+| `--extract=POLICY` | `deny` (default) / `allow` / `prefer` / `force` — controls use of namespace-free extract-and-run mode |
 
 `FILE` is a zip file, a squashfs image (`.sfs`), an ELF binary with an embedded squashfs image, or a
 text file containing base64-encoded zip or squashfs data.
@@ -153,16 +153,28 @@ This allows you to use `fuselage` in a wide variety of scenarios where the
 apparent user-id does not matter. However, tools like `sudo` will behave
 unexpectedly in this mode.
 
-### Extract-and-run mode (`--extract=allow` / `--extract=force`)
+### Extract-and-run mode (`--extract=allow` / `--extract=prefer` / `--extract=force`)
 
 In environments where user namespaces are disabled (e.g. some containers and
 hardened hosts), `fuselage` can run without creating any namespace at all.
 This is the same escape-hatch strategy used by AppImage's
 `--appimage-extract-and-run` flag for running in containers where FUSE is
 unavailable.
-Pass `--extract=force` to always use this mode, or `--extract=allow` to fall
-back to it automatically when `unshare` fails (a warning is printed when the
-fallback is taken).
+
+| Policy | Unprivileged | Setuid / root |
+|--------|-------------|---------------|
+| `deny` (default) | namespace or fail | namespace |
+| `allow` | namespace, extract on fallback | namespace |
+| `prefer` | extract (avoids UID mapping) | namespace |
+| `force` | extract | extract |
+
+`--extract=prefer` is useful when UID remapping from the user namespace is
+undesirable (some tools behave unexpectedly when they see uid=0). In setuid or
+root mode — where there is no user namespace and therefore no UID remapping —
+`prefer` uses a plain mount namespace for its stronger read-only guarantees.
+A fuselage-bundle baked with `--extract=allow` is a single binary that
+self-adapts: it runs with full namespace semantics outside containers and falls
+back to extract-and-run inside locked-down ones.
 
 **Known limitations in extract-and-run mode:**
 

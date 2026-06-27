@@ -16,6 +16,9 @@ enum ExtractPolicy {
     Deny,
     /// Fall back to extract-and-run if namespace creation fails; warn on fallback.
     Allow,
+    /// Prefer extract-and-run when unprivileged (avoids user-namespace UID mapping);
+    /// use a plain mount namespace when setuid/root (no UID mapping there).
+    Prefer,
     /// Always skip namespace creation and use extract-and-run.
     Force,
 }
@@ -190,6 +193,18 @@ fn main() -> Result<()> {
                 true
             }
         },
+        ExtractPolicy::Prefer => {
+            // In privileged mode (setuid/root) there is no user-namespace UID mapping,
+            // so a plain mount namespace is used for its stronger guarantees.
+            // In unprivileged mode a user namespace would remap the caller to uid=0
+            // inside the namespace; extract-and-run preserves the real UID instead.
+            if is_privileged {
+                namespace::enter_namespace()?;
+                false
+            } else {
+                true
+            }
+        }
         ExtractPolicy::Force => true,
     };
 

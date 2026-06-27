@@ -103,6 +103,10 @@ Accepted values:
 - **`allow`** — prefer namespace mode, but fall back to extract-and-run
   automatically if `unshare(2)` fails. A warning is emitted when the fallback
   is taken, since the namespace isolation guarantee is silently dropped.
+- **`prefer`** — prefer extract-and-run when running unprivileged (avoids the
+  UID remapping that a user namespace imposes); use a plain mount namespace when
+  running setuid or as root (no UID remapping there, and read-only enforcement
+  is preserved).
 - **`force`** — always use extract-and-run; skip namespace creation entirely.
 
 Fixed-path mounts (`/run/fuselage/NAME`) are incompatible with extract-and-run
@@ -223,7 +227,8 @@ plain mount namespace with no UID mapping. All mount types are available.
 ### Extract-and-run mode
 
 When `--extract=force` is set, or when `--extract=allow` is set and `unshare(2)`
-fails, fuselage skips `enter_namespace()` entirely and extracts archives into the
+fails, or when `--extract=prefer` is set and the caller is not privileged,
+fuselage skips `enter_namespace()` entirely and extracts archives into the
 procdir without entering a mount namespace. This mode works in locked-down
 containers that block `unshare` or disable unprivileged user namespaces. It is
 the same escape-hatch strategy used by AppImage's `--appimage-extract-and-run`
@@ -258,7 +263,9 @@ flag for running in containers where FUSE is unavailable.
   `--extract=allow` falls back to extract-and-run, fuselage aborts with a
   message explaining the incompatibility.
 - If the mount namespace cannot be created and `--extract=deny` (the default)
-  is in effect, fuselage aborts with a diagnostic.
+  is in effect, fuselage aborts with a diagnostic. The same applies to
+  `--extract=prefer` when running privileged, since a namespace failure there
+  is unexpected.
 
 ## Examples
 

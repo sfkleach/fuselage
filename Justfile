@@ -4,7 +4,7 @@ default:
 shippable:
     python3 scripts/check-changelog.py
 
-test: unittest lint fmt-check audit functest
+test: unittest lint fmt-check audit functest conttest
 
 unittest:
     cargo test
@@ -70,6 +70,13 @@ functest-setuid:
     bash tests/functest.sh target/release/fuselage setuid
 
 functest: functest-debug functest-setuid
+
+conttest:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rm -f target/debug/fuselage target/debug/fuselage-bundle
+    cargo build
+    bash tests/conttest.sh target/debug/fuselage
 
 # Install fuselage locally via cargo install --path . (no sudo required).
 install:
