@@ -19,8 +19,8 @@
 
 set -euo pipefail
 
-FUSELAGE="${1:?usage: conttest.sh <binary>}"
-IMAGE="${FUSELAGE_CONT_IMAGE:-ubuntu:22.04}"
+FUSELAGE="$(realpath "${1:?usage: conttest.sh <binary>}")"
+IMAGE="${FUSELAGE_CONT_IMAGE:-ubuntu:24.04}"
 
 # ── Prerequisite checks ───────────────────────────────────────────────────────
 
@@ -113,7 +113,7 @@ check_stderr() {
 
 # ── Fixture setup ─────────────────────────────────────────────────────────────
 
-WORKDIR="$(dirname "$0")/../_build/conttest-fixtures"
+WORKDIR="$(cd "$(dirname "$0")/.." && pwd)/_build/conttest-fixtures"
 mkdir -p "$WORKDIR"
 trap 'rm -rf "$(dirname "$0")/../_build/conttest-fixtures"' EXIT
 
@@ -191,11 +191,12 @@ check_output "--extract=allow falls back and succeeds" "hello from archive" \
 check_stderr "--extract=allow emits fallback warning to stderr" "extract-and-run" \
     --extract=allow --dynamic="/fixtures/data.zip" -- sh -c 'true'
 
-# --extract=prefer behaves like --extract=force inside an unprivileged container:
-# the binary is not setuid, so extract mode is chosen to avoid UID remapping.
-check_output "--extract=prefer uses extract mode when unprivileged" "hello from archive" \
-    --extract=prefer --dynamic="/fixtures/data.zip" \
-    -- sh -c 'cat "$FUSELAGE_DYNAMIC/data/hello.txt"'
+# --extract=prefer fails in a locked container when running as root: prefer uses
+# namespace mode for root (no UID remapping to avoid), so it hits the blocked
+# unshare just like --extract=deny.  Use --extract=allow or --extract=force
+# when namespace creation may be blocked.
+check_fails "--extract=prefer fails as root when unshare blocked" \
+    --extract=prefer --dynamic="/fixtures/data.zip" -- sh -c 'true'
 
 # Fixed-path mounts are rejected at parse time regardless of the lock status.
 check_fails "--extract=force rejects fixed-path mount" \
@@ -207,7 +208,7 @@ check_fails "--extract=force rejects fixed-path mount" \
 # container so that the procdir path is verifiable after fuselage exits.
 if run_locked_sh '
     _pd=$(/usr/local/bin/fuselage --extract=force --static=/fixtures/rodir.zip \
-        -- sh -c "dirname \"$FUSELAGE_TMPDIR\"")
+        -- sh -c "dirname \"\$FUSELAGE_TMPDIR\"")
     test -n "$_pd" && test ! -e "$_pd"
 ' >/dev/null 2>&1; then
     pass "--extract=force cleans up read-only extracted content on exit"

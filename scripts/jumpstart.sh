@@ -65,7 +65,7 @@ else
     sudo apt-get install -y podman
     echo "==> podman installed."
     echo "    Pull the default container test image when ready:"
-    echo "      podman pull ubuntu:22.04"
+    echo "      podman pull ubuntu:24.04"
 fi
 
 echo ""
@@ -74,4 +74,4 @@ echo "  cargo build --release"
 echo "  just test"
 echo ""
 echo "Optional: to run container tests (tests/conttest.sh), ensure the test image"
-echo "is available locally: podman pull ubuntu:22.04"
+echo "is available locally: podman pull ubuntu:24.04"
