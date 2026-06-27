@@ -9,6 +9,17 @@ mod b64stream;
 mod namespace;
 mod procdir;
 
+/// Controls when extract-and-run mode is used (skips all mount/namespace syscalls).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum ExtractPolicy {
+    /// Fail if a namespace cannot be created (default).
+    Deny,
+    /// Fall back to extract-and-run if namespace creation fails; warn on fallback.
+    Allow,
+    /// Always skip namespace creation and use extract-and-run.
+    Force,
+}
+
 /// Run a command with ephemeral, namespace-private filesystems derived from zip archives.
 #[derive(Parser, Debug)]
 #[command(name = "fuselage", version, about)]
@@ -33,6 +44,11 @@ struct Args {
     /// Find PATH in extracted archives and execute it
     #[arg(long = "run", value_name = "PATH")]
     run: Option<String>,
+
+    /// Extract-and-run policy: skip all mount/namespace syscalls entirely.
+    /// In this mode --static archives are not read-only. See README for details.
+    #[arg(long = "extract", value_enum, default_value_t = ExtractPolicy::Deny)]
+    extract: ExtractPolicy,
 
     /// Command and arguments to run (use after --)
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -93,6 +109,39 @@ fn main() -> Result<()> {
         }
     }
 
+    // Reject fixed-path mounts with --extract=allow/force: extract-and-run mode places
+    // archives under the procdir, not at the fixed path, so fixed paths cannot be honoured.
+    // Both values are rejected at parse time so behaviour is predictable regardless of
+    // whether the namespace attempt succeeds at runtime.
+    if matches!(args.extract, ExtractPolicy::Allow | ExtractPolicy::Force) {
+        for spec in dynamic_specs.iter().chain(static_specs.iter()) {
+            if matches!(spec.mount, archive::MountName::Fixed(_)) {
+                anyhow::bail!(
+                    "fixed mount path {:?} is incompatible with --extract={}",
+                    spec.mount.as_str(),
+                    if args.extract == ExtractPolicy::Allow {
+                        "allow"
+                    } else {
+                        "force"
+                    }
+                );
+            }
+        }
+        for spec in &empty_specs {
+            if matches!(spec.mount, archive::MountName::Fixed(_)) {
+                anyhow::bail!(
+                    "fixed mount path {:?} is incompatible with --extract={}",
+                    spec.mount.as_str(),
+                    if args.extract == ExtractPolicy::Allow {
+                        "allow"
+                    } else {
+                        "force"
+                    }
+                );
+            }
+        }
+    }
+
     if is_setuid {
         nix::unistd::seteuid(ruid).context("seteuid: failed to drop to real uid")?;
     }
@@ -123,11 +172,35 @@ fn main() -> Result<()> {
         }
     }
 
-    // Enter a private mount namespace.
-    namespace::enter_namespace()?;
+    // Enter a private mount namespace, unless extract-and-run mode is active.
+    let use_extract_mode = match args.extract {
+        ExtractPolicy::Deny => {
+            namespace::enter_namespace()?;
+            false
+        }
+        ExtractPolicy::Allow => match namespace::enter_namespace() {
+            Ok(()) => false,
+            Err(e) => {
+                eprintln!(
+                    "fuselage: warning: namespace unavailable ({}); \
+                     falling back to extract-and-run mode \
+                     (--static archives will not be read-only)",
+                    e
+                );
+                true
+            }
+        },
+        ExtractPolicy::Force => true,
+    };
 
-    // Mount a tmpfs over the procdir and create tmp/ inside it.
-    procdir::setup_procdir_in_namespace(&pd)?;
+    // In namespace mode, mount a tmpfs over the procdir and create tmp/ inside it.
+    // In extract-and-run mode, the procdir lives on the real filesystem; just create tmp/.
+    if use_extract_mode {
+        std::fs::create_dir_all(pd.join("tmp"))
+            .context("failed to create procdir tmp directory")?;
+    } else {
+        procdir::setup_procdir_in_namespace(&pd)?;
+    }
 
     let tmpdir = pd.join("tmp");
 
@@ -200,7 +273,7 @@ fn main() -> Result<()> {
             // ── .sfs input ───────────────────────────────────────────────────
             // Use directly — no caching needed, the file is already optimal.
             archive::ArchiveFormat::Squashfs => {
-                if is_privileged {
+                if is_privileged && !use_extract_mode {
                     MountAction::LoopSfs(archive_file, 0)
                 } else {
                     MountAction::ExtractSfsBindRo(archive_file, 0)
@@ -209,7 +282,7 @@ fn main() -> Result<()> {
 
             // ── ELF+squashfs input ────────────────────────────────────────
             archive::ArchiveFormat::ElfSquashfs(offset) => {
-                if is_privileged {
+                if is_privileged && !use_extract_mode {
                     MountAction::LoopSfs(archive_file, offset)
                 } else {
                     MountAction::ExtractSfsBindRo(archive_file, offset)
@@ -250,7 +323,7 @@ fn main() -> Result<()> {
                 }
 
                 if sfs_path.exists() {
-                    if is_privileged {
+                    if is_privileged && !use_extract_mode {
                         MountAction::LoopSfs(sfs_path, 0)
                     } else {
                         MountAction::ExtractSfsBindRo(sfs_path, 0)
@@ -276,23 +349,43 @@ fn main() -> Result<()> {
             .context("failed to chown procdir to real user")?;
     }
 
-    // Phase 3: apply deferred mounts.
+    // Phase 3: apply deferred mounts (or extract-only in extract-and-run mode).
     for (dest, action) in mount_actions {
         match action {
             MountAction::LoopSfs(sfs, offset) => {
+                // Only reached when !use_extract_mode (phase 1 never builds LoopSfs
+                // in extract mode), so no guard needed here.
                 procdir::loop_mount_sfs(&sfs, &dest, offset)?;
             }
             MountAction::ExtractSfsBindRo(sfs, offset) => {
                 archive::extract_squashfs(&sfs, &dest, offset)?;
-                procdir::bind_mount_readonly(&dest)?;
+                if !use_extract_mode {
+                    procdir::bind_mount_readonly(&dest)?;
+                }
             }
             MountAction::BindRoSelf => {
-                procdir::bind_mount_readonly(&dest)?;
+                // Dest already populated in phase 1; only the bind-ro step differs.
+                if !use_extract_mode {
+                    procdir::bind_mount_readonly(&dest)?;
+                }
             }
             MountAction::BindRoFrom(src) => {
-                procdir::bind_mount_readonly_from(&src, &dest)?;
+                if use_extract_mode {
+                    procdir::copy_dir_recursively(&src, &dest).with_context(|| {
+                        format!("failed to copy cache dir to {}", dest.display())
+                    })?;
+                } else {
+                    procdir::bind_mount_readonly_from(&src, &dest)?;
+                }
             }
         }
+    }
+
+    // In setuid + extract mode, static archives are extracted in phase 3 (after the
+    // phase-2 chown), so we need a second chown pass to cover them.
+    if is_setuid && use_extract_mode {
+        procdir::chown_recursive(&pd, ruid, rgid)
+            .context("failed to chown procdir after static extraction")?;
     }
 
     // Set FUSELAGE_TMPDIR so the child process can find its scratch space.

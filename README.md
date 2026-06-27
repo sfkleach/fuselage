@@ -29,6 +29,7 @@ fuselage [OPTIONS...] --run PATH [ARG...]
 | `--static=[NAME:]FILE` | Mount or extract `FILE` into a read-only directory at `$FUSELAGE_STATIC/NAME/` |
 | `--cache-static` | Convert zip `--static` archives to squashfs for faster subsequent runs (requires `mksquashfs`) |
 | `--run PATH` | Find `PATH` in extracted archives and execute it |
+| `--extract=POLICY` | `deny` (default) / `allow` / `force` — controls use of namespace-free extract-and-run mode |
 
 `FILE` is a zip file, a squashfs image (`.sfs`), an ELF binary with an embedded squashfs image, or a
 text file containing base64-encoded zip or squashfs data.
@@ -151,6 +152,31 @@ process to uid 0 inside the namespace.
 This allows you to use `fuselage` in a wide variety of scenarios where the
 apparent user-id does not matter. However, tools like `sudo` will behave
 unexpectedly in this mode.
+
+### Extract-and-run mode (`--extract=allow` / `--extract=force`)
+
+In environments where user namespaces are disabled (e.g. some containers and
+hardened hosts), `fuselage` can run without creating any namespace at all.
+This is the same escape-hatch strategy used by AppImage's
+`--appimage-extract-and-run` flag for running in containers where FUSE is
+unavailable.
+Pass `--extract=force` to always use this mode, or `--extract=allow` to fall
+back to it automatically when `unshare` fails (a warning is printed when the
+fallback is taken).
+
+**Known limitations in extract-and-run mode:**
+
+- **`--static` archives are not read-only.** In normal namespace mode the kernel
+  enforces read-only on static mounts (`EROFS`). In extract-and-run mode there
+  is no mount namespace and therefore no bind-remount-ro. File permissions
+  cannot substitute: the child process owns the extracted files and can restore
+  write permission at will. See [docs/decisions/0004](docs/decisions/0004-extract-mode-no-readonly-enforcement/0004-extract-mode-no-readonly-enforcement.md)
+  for the full analysis.
+- **Fixed-path mounts (`/run/fuselage/NAME`) are unavailable** and produce a
+  hard error if requested.
+
+The extractions remain ephemeral regardless: the procdir is cleaned up when the
+command exits.
 
 ## Installation
 

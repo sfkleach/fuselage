@@ -265,6 +265,35 @@ check_fails "--run without archive rejected" \
 
 echo ""
 
+# ── Test group: --extract ─────────────────────────────────────────────────────
+
+echo "--- --extract ---"
+
+# --extract=force skips the namespace entirely; dynamic content is still readable.
+check_output "--extract=force dynamic content readable" "hello from archive" \
+    "$FUSELAGE" --extract=force --dynamic="$WORKDIR/data.zip" \
+        -- sh -c 'cat "$FUSELAGE_DYNAMIC/data/hello.txt"'
+
+# --extract=force with --static: content is readable (not read-only enforced, but accessible).
+check_output "--extract=force static content readable" "hello from archive" \
+    "$FUSELAGE" --extract=force --static="$WORKDIR/data.zip" \
+        -- sh -c 'cat "$FUSELAGE_STATIC/data/hello.txt"'
+
+# --extract=force rejects fixed-path mounts at parse time.
+check_fails "--extract=force rejects fixed-path mount" \
+    "$FUSELAGE" --extract=force --dynamic="/run/fuselage/myapp:$WORKDIR/data.zip" -- true
+
+# --extract=allow rejects fixed-path mounts at parse time.
+check_fails "--extract=allow rejects fixed-path mount" \
+    "$FUSELAGE" --extract=allow --dynamic="/run/fuselage/myapp:$WORKDIR/data.zip" -- true
+
+# --extract=deny (explicit default) behaves identically to omitting the flag.
+check_output "--extract=deny behaves as default" "hello from archive" \
+    "$FUSELAGE" --extract=deny --dynamic="$WORKDIR/data.zip" \
+        -- sh -c 'cat "$FUSELAGE_DYNAMIC/data/hello.txt"'
+
+echo ""
+
 # ── Test group: error cases ───────────────────────────────────────────────────
 
 echo "--- error cases ---"

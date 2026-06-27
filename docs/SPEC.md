@@ -90,6 +90,26 @@ exactly one archive, execute it with any arguments that follow `--`. Errors if:
 `--run` is an alternative to `-- COMMAND`; use one or the other. Requires at
 least one `--static`, `--dynamic`, or `--dynamic-empty` archive.
 
+### `--extract=POLICY`
+
+Controls whether extract-and-run mode is used. In this mode no `unshare(2)` is
+called and no mount namespace is created, so fuselage works in environments
+where unprivileged user namespaces are disabled (e.g.
+`kernel.unprivileged_userns_clone=0` or a seccomp filter blocking `unshare`).
+Accepted values:
+
+- **`deny`** (default) — never use extract-and-run; fail with a clear error if
+  the required namespace cannot be created.
+- **`allow`** — prefer namespace mode, but fall back to extract-and-run
+  automatically if `unshare(2)` fails. A warning is emitted when the fallback
+  is taken, since the namespace isolation guarantee is silently dropped.
+- **`force`** — always use extract-and-run; skip namespace creation entirely.
+
+Fixed-path mounts (`/run/fuselage/NAME`) are incompatible with extract-and-run
+mode; fuselage aborts with a clear error if both are requested. See
+[Extract-and-run mode](#extract-and-run-mode) in the privilege model for further
+limitations.
+
 ### Archive name uniqueness
 
 All relative archive names must be unique across `--static`, `--dynamic`, and
@@ -200,6 +220,30 @@ extracted (not loop-mounted), and fixed-path mounts are unavailable.
 If the caller is already root (e.g. via `sudo fuselage ...`), fuselage uses a
 plain mount namespace with no UID mapping. All mount types are available.
 
+### Extract-and-run mode
+
+When `--extract=force` is set, or when `--extract=allow` is set and `unshare(2)`
+fails, fuselage skips `enter_namespace()` entirely and extracts archives into the
+procdir without entering a mount namespace. This mode works in locked-down
+containers that block `unshare` or disable unprivileged user namespaces. It is
+the same escape-hatch strategy used by AppImage's `--appimage-extract-and-run`
+flag for running in containers where FUSE is unavailable.
+
+**Known limitations in this mode:**
+
+- **`--static` archives are not read-only.** In namespace mode the static
+  directories are bind-mounted read-only by the kernel (`EROFS` on any write
+  attempt). In extract-and-run mode there is no mount namespace and therefore
+  no bind-remount-ro. File permissions (`chmod -R a-w`) cannot substitute: the
+  child process runs as the same user who owns the extracted files and can
+  restore write permission at will; root ignores file permissions entirely via
+  `CAP_DAC_OVERRIDE`. See [decision 0004](../decisions/0004-extract-mode-no-readonly-enforcement/0004-extract-mode-no-readonly-enforcement.md).
+- **Fixed-path mounts are unavailable.** Archives named `/run/fuselage/NAME`
+  require a private mount namespace to be safe. Requesting one in extract-and-run
+  mode is a hard error.
+- **No tmpfs overlay on the procdir.** The procdir lives on the real filesystem
+  rather than on a private tmpfs; it is still cleaned up on exit.
+
 ## Error handling
 
 - If `~/.fuselage/` does not exist it is created (mode 0700).
@@ -210,7 +254,11 @@ plain mount namespace with no UID mapping. All mount types are available.
 - If `--run` target is not executable, fuselage aborts.
 - If a fixed-path mount is requested in unprivileged mode, fuselage aborts with
   a message indicating that setuid-root installation is required.
-- If the mount namespace cannot be created, fuselage aborts with a diagnostic.
+- If a fixed-path mount is requested with `--extract=force` or when
+  `--extract=allow` falls back to extract-and-run, fuselage aborts with a
+  message explaining the incompatibility.
+- If the mount namespace cannot be created and `--extract=deny` (the default)
+  is in effect, fuselage aborts with a diagnostic.
 
 ## Examples
 

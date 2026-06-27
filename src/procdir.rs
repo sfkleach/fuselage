@@ -197,6 +197,36 @@ pub fn chown_recursive(path: &Path, uid: nix::unistd::Uid, gid: nix::unistd::Gid
     Ok(())
 }
 
+/// Recursively copy a directory tree from `src` to `dest`.
+///
+/// Used in extract-and-run mode as a substitute for bind-mount-readonly when
+/// the directory-cache fallback (--cache-static without mksquashfs) is active.
+pub fn copy_dir_recursively(src: &Path, dest: &Path) -> Result<()> {
+    for entry in fs::read_dir(src).with_context(|| format!("failed to read {}", src.display()))? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let dst = dest.join(entry.file_name());
+        if file_type.is_dir() {
+            fs::create_dir_all(&dst)
+                .with_context(|| format!("failed to create {}", dst.display()))?;
+            copy_dir_recursively(&entry.path(), &dst)?;
+        } else if file_type.is_symlink() {
+            let target = fs::read_link(entry.path())?;
+            std::os::unix::fs::symlink(&target, &dst)
+                .with_context(|| format!("failed to create symlink {}", dst.display()))?;
+        } else {
+            fs::copy(entry.path(), &dst).with_context(|| {
+                format!(
+                    "failed to copy {} to {}",
+                    entry.path().display(),
+                    dst.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 /// Lazily unmount the tmpfs and remove the now-empty procdir.
 ///
 /// Errors are silently ignored since this is best-effort cleanup.
@@ -504,5 +534,50 @@ mod tests {
     fn reap_empty_dir_is_noop() {
         let cache = tempfile::TempDir::new().unwrap();
         reap_cache(cache.path(), 30 * 86400);
+    }
+
+    // ── copy_dir_recursively ──────────────────────────────────────────────────
+
+    #[test]
+    fn copy_dir_recursively_copies_files() {
+        let src = tempfile::TempDir::new().unwrap();
+        let dst = tempfile::TempDir::new().unwrap();
+        fs::write(src.path().join("a.txt"), b"hello").unwrap();
+        fs::write(src.path().join("b.txt"), b"world").unwrap();
+
+        copy_dir_recursively(src.path(), dst.path()).unwrap();
+
+        assert_eq!(fs::read(dst.path().join("a.txt")).unwrap(), b"hello");
+        assert_eq!(fs::read(dst.path().join("b.txt")).unwrap(), b"world");
+    }
+
+    #[test]
+    fn copy_dir_recursively_copies_nested_directories() {
+        let src = tempfile::TempDir::new().unwrap();
+        let dst = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(src.path().join("sub/deep")).unwrap();
+        fs::write(src.path().join("sub/deep/nested.txt"), b"nested").unwrap();
+        fs::write(src.path().join("top.txt"), b"top").unwrap();
+
+        copy_dir_recursively(src.path(), dst.path()).unwrap();
+
+        assert_eq!(fs::read(dst.path().join("top.txt")).unwrap(), b"top");
+        assert_eq!(
+            fs::read(dst.path().join("sub/deep/nested.txt")).unwrap(),
+            b"nested"
+        );
+    }
+
+    #[test]
+    fn copy_dir_recursively_copies_symlinks() {
+        let src = tempfile::TempDir::new().unwrap();
+        let dst = tempfile::TempDir::new().unwrap();
+        fs::write(src.path().join("real.txt"), b"target").unwrap();
+        std::os::unix::fs::symlink("real.txt", src.path().join("link.txt")).unwrap();
+
+        copy_dir_recursively(src.path(), dst.path()).unwrap();
+
+        let target = fs::read_link(dst.path().join("link.txt")).unwrap();
+        assert_eq!(target, std::path::Path::new("real.txt"));
     }
 }

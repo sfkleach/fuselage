@@ -2,6 +2,24 @@
 
 Following the style in https://keepachangelog.com/en/1.0.0/
 
+## Unreleased
+
+### Added
+
+- `--extract=POLICY` flag: controls whether extract-and-run mode is used.
+  `deny` (default) preserves current behaviour and fails if a namespace cannot
+  be created. `allow` falls back to extract-and-run automatically when
+  `unshare(2)` fails, emitting a warning. `force` always skips namespace
+  creation. Extract-and-run mode requires no `CAP_SYS_ADMIN`, no loop devices,
+  and no `unshare` support, making fuselage usable in locked-down containers
+  where unprivileged user namespaces are disabled.
+
+  **Known limitation:** `--static` archives are not enforced read-only in this
+  mode. The kernel's bind-remount-ro cannot be applied without a mount
+  namespace, and file permissions (`chmod -R a-w`) are trivially bypassed by
+  the file owner. See [README — Extract-and-run mode](README.md#extract-and-run-mode)
+  and [design decision 0004](docs/decisions/0004-extract-mode-no-readonly-enforcement/0004-extract-mode-no-readonly-enforcement.md).
+
 ## v0.4.0, uv-bundle 2026-06-21
 
 ### Added
