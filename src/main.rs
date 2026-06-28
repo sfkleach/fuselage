@@ -181,8 +181,13 @@ fn main() -> Result<()> {
             namespace::enter_namespace()?;
             false
         }
-        ExtractPolicy::Allow => match namespace::enter_namespace() {
-            Ok(()) => false,
+        ExtractPolicy::Allow => match namespace::try_unshare(is_privileged) {
+            Ok(()) => {
+                // Unshare succeeded — complete setup; failures here are fatal
+                // because the process is already inside the namespace.
+                namespace::finish_namespace_setup(is_privileged, ruid, rgid)?;
+                false
+            }
             Err(e) => {
                 eprintln!(
                     "fuselage: warning: namespace unavailable ({}); \
