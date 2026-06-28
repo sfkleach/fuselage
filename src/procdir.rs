@@ -315,9 +315,14 @@ pub fn spawn_cache_reaper(cache_dir: &Path) {
 /// Required before `remove_dir_all` when the tree may contain directories
 /// extracted from archives with mode 0555 (no write bit).  Only the owner
 /// bits are touched; group/other permissions are left unchanged.
+///
+/// Uses `symlink_metadata` (lstat semantics) and skips symlink entries so that
+/// archive-controlled symlinks cannot redirect chmod outside the procdir.
+/// On Linux, `chmod(2)` follows symlinks, so calling `set_permissions` on a
+/// symlink path would alter the target rather than the link itself.
 fn make_dir_tree_writable(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
-    if let Ok(meta) = fs::metadata(path)
+    if let Ok(meta) = fs::symlink_metadata(path)
         && meta.is_dir()
     {
         let mode = meta.permissions().mode();
@@ -326,6 +331,11 @@ fn make_dir_tree_writable(path: &Path) {
         }
         if let Ok(entries) = fs::read_dir(path) {
             for entry in entries.flatten() {
+                // file_type() on a DirEntry uses lstat semantics; skip
+                // symlinks so we never chmod or recurse through a link target.
+                if entry.file_type().map_or(true, |ft| ft.is_symlink()) {
+                    continue;
+                }
                 make_dir_tree_writable(&entry.path());
             }
         }
