@@ -92,7 +92,40 @@ fn main() -> Result<()> {
     let empty_specs = parse_empty_specs(&args.dynamic_empty, &mut seen_names)?;
     let static_specs = parse_archive_specs(&args.r#static, &mut seen_names)?;
 
-    // Reject fixed-path mounts in unprivileged mode at parse time, before any work.
+    // Reject fixed-path mounts that are incompatible with extract-and-run mode.
+    // Checked before the privilege check so the error names --extract as the cause
+    // rather than suggesting setuid as the fix when that would not help.
+    // allow/force are always incompatible; prefer is incompatible when unprivileged
+    // (because unprivileged prefer always uses extract-and-run).
+    let extract_policy_name = match args.extract {
+        ExtractPolicy::Allow => Some("allow"),
+        ExtractPolicy::Prefer if !is_privileged => Some("prefer"),
+        ExtractPolicy::Force => Some("force"),
+        _ => None,
+    };
+    if let Some(policy) = extract_policy_name {
+        for spec in dynamic_specs.iter().chain(static_specs.iter()) {
+            if matches!(spec.mount, archive::MountName::Fixed(_)) {
+                anyhow::bail!(
+                    "fixed mount path {:?} is incompatible with --extract={}",
+                    spec.mount.as_str(),
+                    policy
+                );
+            }
+        }
+        for spec in &empty_specs {
+            if matches!(spec.mount, archive::MountName::Fixed(_)) {
+                anyhow::bail!(
+                    "fixed mount path {:?} is incompatible with --extract={}",
+                    spec.mount.as_str(),
+                    policy
+                );
+            }
+        }
+    }
+
+    // Reject remaining fixed-path mounts in unprivileged mode (deny/prefer-privileged
+    // are already handled above or will use a namespace, so this catches deny + unprivileged).
     if !is_privileged {
         for spec in dynamic_specs.iter().chain(static_specs.iter()) {
             if matches!(spec.mount, archive::MountName::Fixed(_)) {
@@ -107,39 +140,6 @@ fn main() -> Result<()> {
                 anyhow::bail!(
                     "fixed mount path {:?} requires privileged (setuid-root) mode",
                     spec.mount.as_str()
-                );
-            }
-        }
-    }
-
-    // Reject fixed-path mounts with --extract=allow/force: extract-and-run mode places
-    // archives under the procdir, not at the fixed path, so fixed paths cannot be honoured.
-    // Both values are rejected at parse time so behaviour is predictable regardless of
-    // whether the namespace attempt succeeds at runtime.
-    if matches!(args.extract, ExtractPolicy::Allow | ExtractPolicy::Force) {
-        for spec in dynamic_specs.iter().chain(static_specs.iter()) {
-            if matches!(spec.mount, archive::MountName::Fixed(_)) {
-                anyhow::bail!(
-                    "fixed mount path {:?} is incompatible with --extract={}",
-                    spec.mount.as_str(),
-                    if args.extract == ExtractPolicy::Allow {
-                        "allow"
-                    } else {
-                        "force"
-                    }
-                );
-            }
-        }
-        for spec in &empty_specs {
-            if matches!(spec.mount, archive::MountName::Fixed(_)) {
-                anyhow::bail!(
-                    "fixed mount path {:?} is incompatible with --extract={}",
-                    spec.mount.as_str(),
-                    if args.extract == ExtractPolicy::Allow {
-                        "allow"
-                    } else {
-                        "force"
-                    }
                 );
             }
         }
