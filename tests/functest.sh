@@ -265,6 +265,71 @@ check_fails "--run without archive rejected" \
 
 echo ""
 
+# ── Test group: --extract ─────────────────────────────────────────────────────
+
+echo "--- --extract ---"
+
+# --extract=force skips the namespace entirely; dynamic content is still readable.
+check_output "--extract=force dynamic content readable" "hello from archive" \
+    "$FUSELAGE" --extract=force --dynamic="$WORKDIR/data.zip" \
+        -- sh -c 'cat "$FUSELAGE_DYNAMIC/data/hello.txt"'
+
+# --extract=force with --static: content is readable (not read-only enforced, but accessible).
+check_output "--extract=force static content readable" "hello from archive" \
+    "$FUSELAGE" --extract=force --static="$WORKDIR/data.zip" \
+        -- sh -c 'cat "$FUSELAGE_STATIC/data/hello.txt"'
+
+# --extract=force rejects fixed-path mounts at parse time.
+check_fails "--extract=force rejects fixed-path mount" \
+    "$FUSELAGE" --extract=force --dynamic="/run/fuselage/myapp:$WORKDIR/data.zip" -- true
+
+# --extract=allow rejects fixed-path mounts at parse time.
+check_fails "--extract=allow rejects fixed-path mount" \
+    "$FUSELAGE" --extract=allow --dynamic="/run/fuselage/myapp:$WORKDIR/data.zip" -- true
+
+# --extract=deny (explicit default) behaves identically to omitting the flag.
+check_output "--extract=deny behaves as default" "hello from archive" \
+    "$FUSELAGE" --extract=deny --dynamic="$WORKDIR/data.zip" \
+        -- sh -c 'cat "$FUSELAGE_DYNAMIC/data/hello.txt"'
+
+# --extract=prefer uses extract mode when unprivileged (no user namespace),
+# so dynamic content is accessible and static is NOT read-only.
+check_output "--extract=prefer dynamic content readable" "hello from archive" \
+    "$FUSELAGE" --extract=prefer --dynamic="$WORKDIR/data.zip" \
+        -- sh -c 'cat "$FUSELAGE_DYNAMIC/data/hello.txt"'
+
+if [[ "$MODE" == "plain" ]]; then
+    # In plain (unprivileged) mode --extract=prefer uses extract-and-run (no
+    # user namespace), so static archives are extracted but never
+    # bind-remounted read-only — the same limitation as --extract=force.
+    check_output "--extract=prefer static content readable in plain mode" "hello from archive" \
+        "$FUSELAGE" --extract=prefer --static="$WORKDIR/data.zip" \
+            -- sh -c 'cat "$FUSELAGE_STATIC/data/hello.txt"'
+    check "--extract=prefer static is writable in plain mode" \
+        "$FUSELAGE" --extract=prefer --static="$WORKDIR/data.zip" -- \
+            sh -c 'touch "$FUSELAGE_STATIC/data/probe"'
+fi
+
+if [[ "$MODE" == "setuid" ]]; then
+    # In setuid mode --extract=prefer uses a plain mount namespace (no UID
+    # remapping), so static archives ARE read-only — same as normal mode.
+    check "--extract=prefer static is read-only in setuid mode" \
+        "$FUSELAGE" --extract=prefer --static="$WORKDIR/data.zip" -- \
+            sh -c '! touch "$FUSELAGE_STATIC/data/probe" 2>/dev/null'
+fi
+
+# Verify that the procdir is fully removed on exit even when extracted content
+# includes read-only directories (mode 0555) and files (mode 0444).  Capture
+# the procdir path during the run, then assert it no longer exists afterwards.
+_procdir=$(
+    "$FUSELAGE" --extract=force --static="$WORKDIR/rodir.zip" \
+        -- sh -c 'dirname "$FUSELAGE_TMPDIR"'
+)
+check "--extract=force cleans up read-only extracted content on exit" \
+    test -n "$_procdir" -a ! -e "$_procdir"
+
+echo ""
+
 # ── Test group: error cases ───────────────────────────────────────────────────
 
 echo "--- error cases ---"

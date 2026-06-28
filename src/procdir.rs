@@ -184,10 +184,16 @@ pub fn bind_mount_readonly(path: &Path) -> Result<()> {
 ///
 /// Used in setuid mode to hand ownership of the tmpfs contents to the real user
 /// after all dirs and extracted archives have been created as root.
+///
+/// Uses `lchown(2)` and `symlink_metadata` so that symlinks extracted from
+/// archive-controlled content cannot redirect ownership changes outside the
+/// procdir: only the symlink entry itself is chowned and it is never traversed.
 pub fn chown_recursive(path: &Path, uid: nix::unistd::Uid, gid: nix::unistd::Gid) -> Result<()> {
-    nix::unistd::chown(path, Some(uid), Some(gid))
+    std::os::unix::fs::lchown(path, Some(uid.as_raw()), Some(gid.as_raw()))
         .with_context(|| format!("chown failed on {}", path.display()))?;
-    if path.is_dir() {
+    let meta =
+        fs::symlink_metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
+    if meta.is_dir() {
         for entry in
             fs::read_dir(path).with_context(|| format!("failed to read {}", path.display()))?
         {
@@ -197,12 +203,59 @@ pub fn chown_recursive(path: &Path, uid: nix::unistd::Uid, gid: nix::unistd::Gid
     Ok(())
 }
 
-/// Lazily unmount the tmpfs and remove the now-empty procdir.
+/// Recursively copy a directory tree from `src` to `dest`.
 ///
-/// Errors are silently ignored since this is best-effort cleanup.
-pub fn cleanup_procdir(procdir: &Path) {
-    let _ = umount2(procdir, MntFlags::MNT_DETACH);
-    let _ = fs::remove_dir(procdir);
+/// Used in extract-and-run mode as a substitute for bind-mount-readonly when
+/// the directory-cache fallback (--cache-static without mksquashfs) is active.
+pub fn copy_dir_recursively(src: &Path, dest: &Path) -> Result<()> {
+    for entry in fs::read_dir(src).with_context(|| format!("failed to read {}", src.display()))? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let dst = dest.join(entry.file_name());
+        if file_type.is_dir() {
+            fs::create_dir_all(&dst)
+                .with_context(|| format!("failed to create {}", dst.display()))?;
+            copy_dir_recursively(&entry.path(), &dst)?;
+        } else if file_type.is_symlink() {
+            let target = fs::read_link(entry.path())?;
+            std::os::unix::fs::symlink(&target, &dst)
+                .with_context(|| format!("failed to create symlink {}", dst.display()))?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), &dst).with_context(|| {
+                format!(
+                    "failed to copy {} to {}",
+                    entry.path().display(),
+                    dst.display()
+                )
+            })?;
+        } else {
+            // FIFOs, sockets, and device nodes are not expected in archive
+            // extractions; fs::copy on a FIFO blocks indefinitely.
+            anyhow::bail!(
+                "unsupported file type in archive extraction: {}",
+                entry.path().display()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Remove the procdir and all its contents on exit.
+///
+/// In namespace mode the procdir has a tmpfs overlaid on it: detach that first,
+/// then remove the now-empty underlying directory. In extract-and-run mode there
+/// is no tmpfs, so the procdir contains real extracted files that must be removed
+/// recursively; directories may have been extracted with read-only permissions, so
+/// the tree is made writable before removal. Errors are silently ignored since this
+/// is best-effort cleanup.
+pub fn cleanup_procdir(procdir: &Path, use_extract_mode: bool) {
+    if use_extract_mode {
+        make_dir_tree_writable(procdir);
+        let _ = fs::remove_dir_all(procdir);
+    } else {
+        let _ = umount2(procdir, MntFlags::MNT_DETACH);
+        let _ = fs::remove_dir(procdir);
+    }
 }
 
 /// Touch a cache sentinel file to record the current time as last-use time.
@@ -269,9 +322,14 @@ pub fn spawn_cache_reaper(cache_dir: &Path) {
 /// Required before `remove_dir_all` when the tree may contain directories
 /// extracted from archives with mode 0555 (no write bit).  Only the owner
 /// bits are touched; group/other permissions are left unchanged.
+///
+/// Uses `symlink_metadata` (lstat semantics) and skips symlink entries so that
+/// archive-controlled symlinks cannot redirect chmod outside the procdir.
+/// On Linux, `chmod(2)` follows symlinks, so calling `set_permissions` on a
+/// symlink path would alter the target rather than the link itself.
 fn make_dir_tree_writable(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
-    if let Ok(meta) = fs::metadata(path)
+    if let Ok(meta) = fs::symlink_metadata(path)
         && meta.is_dir()
     {
         let mode = meta.permissions().mode();
@@ -280,6 +338,11 @@ fn make_dir_tree_writable(path: &Path) {
         }
         if let Ok(entries) = fs::read_dir(path) {
             for entry in entries.flatten() {
+                // file_type() on a DirEntry uses lstat semantics; skip
+                // symlinks so we never chmod or recurse through a link target.
+                if entry.file_type().map_or(true, |ft| ft.is_symlink()) {
+                    continue;
+                }
                 make_dir_tree_writable(&entry.path());
             }
         }
@@ -504,5 +567,50 @@ mod tests {
     fn reap_empty_dir_is_noop() {
         let cache = tempfile::TempDir::new().unwrap();
         reap_cache(cache.path(), 30 * 86400);
+    }
+
+    // ── copy_dir_recursively ──────────────────────────────────────────────────
+
+    #[test]
+    fn copy_dir_recursively_copies_files() {
+        let src = tempfile::TempDir::new().unwrap();
+        let dst = tempfile::TempDir::new().unwrap();
+        fs::write(src.path().join("a.txt"), b"hello").unwrap();
+        fs::write(src.path().join("b.txt"), b"world").unwrap();
+
+        copy_dir_recursively(src.path(), dst.path()).unwrap();
+
+        assert_eq!(fs::read(dst.path().join("a.txt")).unwrap(), b"hello");
+        assert_eq!(fs::read(dst.path().join("b.txt")).unwrap(), b"world");
+    }
+
+    #[test]
+    fn copy_dir_recursively_copies_nested_directories() {
+        let src = tempfile::TempDir::new().unwrap();
+        let dst = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(src.path().join("sub/deep")).unwrap();
+        fs::write(src.path().join("sub/deep/nested.txt"), b"nested").unwrap();
+        fs::write(src.path().join("top.txt"), b"top").unwrap();
+
+        copy_dir_recursively(src.path(), dst.path()).unwrap();
+
+        assert_eq!(fs::read(dst.path().join("top.txt")).unwrap(), b"top");
+        assert_eq!(
+            fs::read(dst.path().join("sub/deep/nested.txt")).unwrap(),
+            b"nested"
+        );
+    }
+
+    #[test]
+    fn copy_dir_recursively_copies_symlinks() {
+        let src = tempfile::TempDir::new().unwrap();
+        let dst = tempfile::TempDir::new().unwrap();
+        fs::write(src.path().join("real.txt"), b"target").unwrap();
+        std::os::unix::fs::symlink("real.txt", src.path().join("link.txt")).unwrap();
+
+        copy_dir_recursively(src.path(), dst.path()).unwrap();
+
+        let target = fs::read_link(dst.path().join("link.txt")).unwrap();
+        assert_eq!(target, std::path::Path::new("real.txt"));
     }
 }

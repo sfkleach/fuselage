@@ -4,7 +4,7 @@ default:
 shippable:
     python3 scripts/check-changelog.py
 
-test: unittest lint fmt-check audit functest
+test: unittest lint fmt-check audit functest conttest
 
 unittest:
     cargo test
@@ -55,12 +55,6 @@ functest-debug:
     cargo build
     bash tests/functest.sh target/debug/fuselage plain
 
-functest-debug-run:
-    bash tests/functest.sh target/debug/fuselage plain
-
-functest-setuid-run:
-    bash tests/functest.sh target/release/fuselage setuid
-
 functest-setuid:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -76,6 +70,19 @@ functest-setuid:
     bash tests/functest.sh target/release/fuselage setuid
 
 functest: functest-debug functest-setuid
+
+# Run the containerized tests. Requires podman to be installed.
+conttest:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v podman >/dev/null 2>&1; then
+        echo "SKIP: conttest (podman not installed)"
+        exit 0
+    fi
+    rustup target add x86_64-unknown-linux-musl
+    rm -f target/x86_64-unknown-linux-musl/debug/fuselage
+    cargo build --target x86_64-unknown-linux-musl
+    bash tests/conttest.sh target/x86_64-unknown-linux-musl/debug/fuselage
 
 # Install fuselage locally via cargo install --path . (no sudo required).
 install:
