@@ -9,7 +9,7 @@ mod b64stream;
 mod namespace;
 mod procdir;
 
-/// Controls when extract-and-run mode is used (skips all mount/namespace syscalls).
+/// Controls when extract-and-run mode is used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum ExtractPolicy {
     /// Fail if a namespace cannot be created (default).
@@ -48,8 +48,8 @@ struct Args {
     #[arg(long = "run", value_name = "PATH")]
     run: Option<String>,
 
-    /// Extract-and-run policy: skip all mount/namespace syscalls entirely.
-    /// In this mode --static archives are not read-only. See README for details.
+    /// Controls when extract-and-run mode is used (skipping namespace creation).
+    /// In extract-and-run mode --static archives are not read-only. See README for details.
     #[arg(long = "extract", value_enum, default_value_t = ExtractPolicy::Deny)]
     extract: ExtractPolicy,
 
