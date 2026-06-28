@@ -184,10 +184,16 @@ pub fn bind_mount_readonly(path: &Path) -> Result<()> {
 ///
 /// Used in setuid mode to hand ownership of the tmpfs contents to the real user
 /// after all dirs and extracted archives have been created as root.
+///
+/// Uses `lchown(2)` and `symlink_metadata` so that symlinks extracted from
+/// archive-controlled content cannot redirect ownership changes outside the
+/// procdir: only the symlink entry itself is chowned and it is never traversed.
 pub fn chown_recursive(path: &Path, uid: nix::unistd::Uid, gid: nix::unistd::Gid) -> Result<()> {
-    nix::unistd::chown(path, Some(uid), Some(gid))
+    std::os::unix::fs::lchown(path, Some(uid.as_raw()), Some(gid.as_raw()))
         .with_context(|| format!("chown failed on {}", path.display()))?;
-    if path.is_dir() {
+    let meta =
+        fs::symlink_metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
+    if meta.is_dir() {
         for entry in
             fs::read_dir(path).with_context(|| format!("failed to read {}", path.display()))?
         {
