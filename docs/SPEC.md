@@ -242,7 +242,7 @@ flag for running in containers where FUSE is unavailable.
   no bind-remount-ro. File permissions (`chmod -R a-w`) cannot substitute: the
   child process runs as the same user who owns the extracted files and can
   restore write permission at will; root ignores file permissions entirely via
-  `CAP_DAC_OVERRIDE`. See [decision 0004](../decisions/0004-extract-mode-no-readonly-enforcement/0004-extract-mode-no-readonly-enforcement.md).
+  `CAP_DAC_OVERRIDE`. See [decision 0004](decisions/0004-extract-mode-no-readonly-enforcement/0004-extract-mode-no-readonly-enforcement.md).
 - **Fixed-path mounts are unavailable.** Archives named `/run/fuselage/NAME`
   require a private mount namespace to be safe. Requesting one in extract-and-run
   mode is a hard error.
