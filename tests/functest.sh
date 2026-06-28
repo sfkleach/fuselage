@@ -298,6 +298,18 @@ check_output "--extract=prefer dynamic content readable" "hello from archive" \
     "$FUSELAGE" --extract=prefer --dynamic="$WORKDIR/data.zip" \
         -- sh -c 'cat "$FUSELAGE_DYNAMIC/data/hello.txt"'
 
+if [[ "$MODE" == "plain" ]]; then
+    # In plain (unprivileged) mode --extract=prefer uses extract-and-run (no
+    # user namespace), so static archives are extracted but never
+    # bind-remounted read-only — the same limitation as --extract=force.
+    check_output "--extract=prefer static content readable in plain mode" "hello from archive" \
+        "$FUSELAGE" --extract=prefer --static="$WORKDIR/data.zip" \
+            -- sh -c 'cat "$FUSELAGE_STATIC/data/hello.txt"'
+    check "--extract=prefer static is writable in plain mode" \
+        "$FUSELAGE" --extract=prefer --static="$WORKDIR/data.zip" -- \
+            sh -c 'touch "$FUSELAGE_STATIC/data/probe"'
+fi
+
 if [[ "$MODE" == "setuid" ]]; then
     # In setuid mode --extract=prefer uses a plain mount namespace (no UID
     # remapping), so static archives ARE read-only — same as normal mode.
