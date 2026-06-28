@@ -31,6 +31,9 @@ The goal is to build robust, well-designed software, not to avoid technical disa
   the established template. However you do not need to precisely follow the template.
 - In some cases there were not multiple options considered so the pros-and-cons
   section may be omitted and we simply document the reasoning behind the decision.
+- When working on the `main` branch, do not commit or push. Leave any work-in-progress
+  as uncommitted changes and inform the user, who will decide whether to commit directly
+  or move the work to a feature branch.
 
 ## Programming Guidelines
 
