@@ -71,12 +71,18 @@ functest-setuid:
 
 functest: functest-debug functest-setuid
 
+# Run the containerized tests. Requires podman to be installed.
 conttest:
     #!/usr/bin/env bash
     set -euo pipefail
-    rm -f target/debug/fuselage target/debug/fuselage-bundle
-    cargo build
-    bash tests/conttest.sh target/debug/fuselage
+    if ! command -v podman >/dev/null 2>&1; then
+        echo "SKIP: conttest (podman not installed)"
+        exit 0
+    fi
+    rustup target add x86_64-unknown-linux-musl
+    rm -f target/x86_64-unknown-linux-musl/debug/fuselage
+    cargo build --target x86_64-unknown-linux-musl
+    bash tests/conttest.sh target/x86_64-unknown-linux-musl/debug/fuselage
 
 # Install fuselage locally via cargo install --path . (no sudo required).
 install:

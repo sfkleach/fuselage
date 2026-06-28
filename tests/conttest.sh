@@ -20,7 +20,7 @@
 set -euo pipefail
 
 FUSELAGE="$(realpath "${1:?usage: conttest.sh <binary>}")"
-IMAGE="${FUSELAGE_CONT_IMAGE:-ubuntu:24.04}"
+IMAGE="${FUSELAGE_CONT_IMAGE:-ubuntu:22.04}"
 
 # ── Prerequisite checks ───────────────────────────────────────────────────────
 
