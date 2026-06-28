@@ -220,7 +220,7 @@ pub fn copy_dir_recursively(src: &Path, dest: &Path) -> Result<()> {
             let target = fs::read_link(entry.path())?;
             std::os::unix::fs::symlink(&target, &dst)
                 .with_context(|| format!("failed to create symlink {}", dst.display()))?;
-        } else {
+        } else if file_type.is_file() {
             fs::copy(entry.path(), &dst).with_context(|| {
                 format!(
                     "failed to copy {} to {}",
@@ -228,6 +228,13 @@ pub fn copy_dir_recursively(src: &Path, dest: &Path) -> Result<()> {
                     dst.display()
                 )
             })?;
+        } else {
+            // FIFOs, sockets, and device nodes are not expected in archive
+            // extractions; fs::copy on a FIFO blocks indefinitely.
+            anyhow::bail!(
+                "unsupported file type in archive extraction: {}",
+                entry.path().display()
+            );
         }
     }
     Ok(())
