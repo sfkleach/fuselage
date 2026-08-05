@@ -2,7 +2,7 @@
 
 Following the style in https://keepachangelog.com/en/1.0.0/
 
-## Unreleased
+## v0.5.0, extract-and-run mode 2026-08-05
 
 ### Added
 
@@ -21,6 +21,14 @@ Following the style in https://keepachangelog.com/en/1.0.0/
   namespace, and file permissions (`chmod -R a-w`) are trivially bypassed by
   the file owner. See [README — Extract-and-run mode](README.md#extract-and-run-mode)
   and [design decision 0004](docs/decisions/0004-extract-mode-no-readonly-enforcement/0004-extract-mode-no-readonly-enforcement.md).
+
+### Security
+
+- Updated `crossbeam-epoch` (0.9.18 → 0.9.20) to fix RUSTSEC-2026-0204 (invalid
+  pointer dereference in `fmt::Pointer`), `anyhow` (1.0.102 → 1.0.104) to fix
+  RUSTSEC-2026-0190 (unsoundness in `Error::downcast_mut()`), and `fastrand`
+  (2.4.0 → 2.5.0) to replace a yanked version. Lockfile-only update via
+  `cargo update`; no `Cargo.toml` changes required.
 
 ## v0.4.0, uv-bundle 2026-06-21
 
