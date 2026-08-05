@@ -244,10 +244,10 @@ and install setuid-root as shown below.
 # Download to (say) ~/.local/bin/fuselage for your architecture. This example
 # assumes 64-bit Intel and moves the binary to ~/.local/bin, which is typically
 # on your $PATH. IMPORTANT: replace the version number with the current release.
-wget https://github.com/sfkleach/fuselage/releases/download/v0.4.0/fuselage-v0.4.0-x86_64-unknown-linux-gnu.tar.gz
-tar zxf fuselage-v0.4.0-x86_64-unknown-linux-gnu.tar.gz fuselage fuselage-bundle
+wget https://github.com/sfkleach/fuselage/releases/download/v0.5.0/fuselage-v0.5.0-x86_64-unknown-linux-gnu.tar.gz
+tar zxf fuselage-v0.5.0-x86_64-unknown-linux-gnu.tar.gz fuselage fuselage-bundle
 mv -i fuselage fuselage-bundle ~/.local/bin
-rm -f fuselage-v0.4.0-x86_64-unknown-linux-gnu.tar.gz
+rm -f fuselage-v0.5.0-x86_64-unknown-linux-gnu.tar.gz
 
 # setuid-root for normal setup (optional).
 sudo chown root:root ~/.local/bin/fuselage
